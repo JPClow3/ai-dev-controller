@@ -18,6 +18,8 @@ export interface ResolvableIssue {
   labels: string[];
 }
 
+// Underscore is included deliberately: a repository named `moto_track` would
+// otherwise silently truncate to `moto` and resolve to nothing.
 const MARKER = /(?:^|\s)repo:([A-Za-z0-9._-]+)/;
 
 /** `repo:<id>` in the body or as a label. Labels win — they are structured. */

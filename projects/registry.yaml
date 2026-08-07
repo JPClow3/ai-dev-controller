@@ -1,42 +1,153 @@
-# One entry per development repository. `ai-dev onboard <path>` appends here.
+# One entry per development repository.
+#
 # Repository-owned specifics (validation commands, risk paths, knowledge map)
-# live in each repository's .ai-workflow/project.yaml, not here.
+# live in each repository's .ai-workflow/project.yaml, not here. This file only
+# answers "which repository does this Linear issue belong to, and where is it".
+#
+# `base_branch` was read from each repository's actual origin/HEAD, not assumed.
+# Inova and hefesto are on `master`.
+#
+# Each Linear project maps to exactly one repository, so no `groups` are needed
+# and resolution succeeds via `sole_project`. Add a group only when one Linear
+# project spans several repositories.
 
-projects: {}
+projects:
+  unirv-monolith:
+    enabled: true
+    repository:
+      path: H:/Code/UniRV/unirv-monolith
+      github: AgroHub-Uni-RV/unirv-monolith
+      base_branch: main
+    linear:
+      project: AgroHub Monolith
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
 
-# Multi-repository Linear projects. An issue body or label containing
-# `repo:<id>` overrides the group default. If the controller cannot resolve
-# exactly one repository it applies `ai-needs-context` rather than guessing.
+  lorebound:
+    enabled: true
+    repository:
+      path: H:/Code/Pessoais/Lorebound
+      github: JPClow3/Lorebound
+      base_branch: main
+    linear:
+      project: Lorebound
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+
+  moto-track:
+    enabled: true
+    repository:
+      path: H:/Code/Pessoais/moto_track
+      github: JPClow3/moto_track
+      base_branch: main
+    linear:
+      project: Moto Track
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+
+  portfolio:
+    enabled: true
+    repository:
+      path: H:/Code/Pessoais/Portfolio
+      github: JPClow3/Portfolio
+      base_branch: main
+    linear:
+      project: Portfolio
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+
+  # Default branch is master, not main.
+  inova:
+    enabled: true
+    repository:
+      path: H:/Code/Freelance/Inova
+      github: JPClow3/Inova
+      base_branch: master
+    linear:
+      project: Inova
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+
+  fatec-web:
+    enabled: true
+    repository:
+      path: H:/Code/Freelance/fatec-web
+      github: JPClow3/fatec-web
+      base_branch: main
+    linear:
+      project: FATEC Web
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+
+  throughline:
+    enabled: true
+    repository:
+      path: H:/Code/Pessoais/Throughline
+      github: JPClow3/Throughline
+      base_branch: main
+    linear:
+      project: Throughline
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+
+  # Python data/model pipeline. Default branch is master, not main.
+  # Distinct repository from hefesto-site.
+  hefesto:
+    enabled: true
+    repository:
+      path: H:/Code/Pessoais/hefesto
+      github: JPClow3/hefesto
+      base_branch: master
+    linear:
+      project: Hefesto Pipeline
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+
+  hefesto-site:
+    enabled: true
+    repository:
+      path: H:/Code/Pessoais/Hefesto-Site
+      github: JPClow3/Hefesto-Site
+      base_branch: main
+    linear:
+      project: Hefesto Site
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+
 groups: {}
-
-# ---------------------------------------------------------------------------
-# Reference example, matching repositories already registered in Orca.
-# Delete or adapt.
-# ---------------------------------------------------------------------------
-#
-# projects:
-#   climagro-django:
-#     enabled: true
-#     repository:
-#       path: H:/Code/UniRV/climagro-django
-#       github: AgroHub-Uni-RV/climagro-django
-#       base_branch: main
-#     linear:
-#       project: Unirv
-#       default: true
-#     knowledge:
-#       status: unverified
-#     concurrency:
-#       max_agents: 5
-#     routing_profile: default
-#     validation:
-#       source: repository
-#
-# groups:
-#   unirv:
-#     linear_project: Unirv
-#     default_repository: climagro-django
-#     repositories:
-#       - climagro-django
-#       - inmet-api
-#       - agrohub-mobile
