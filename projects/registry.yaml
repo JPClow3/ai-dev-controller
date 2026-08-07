@@ -1,0 +1,58 @@
+version: 1
+
+# One entry per development repository. `ai-dev onboard <path>` appends here.
+# Repository-owned specifics (validation commands, risk paths, knowledge map)
+# live in each repository's .ai-workflow/project.yaml - not here.
+
+projects: {}
+
+# ---------------------------------------------------------------------------
+# Reference examples. Delete or adapt.
+# ---------------------------------------------------------------------------
+#
+# projects:
+#   hefesto-backend:
+#     enabled: true
+#     repository:
+#       path: H:/Code/Pessoais/hefesto-backend
+#       github: JPClow3/hefesto-backend
+#       base_branch: main
+#     linear:
+#       project: Hefesto
+#       default: true
+#     knowledge:
+#       status: unverified          # unverified | verified
+#       bootstrap_pr: null
+#     concurrency:
+#       max_agents: 5
+#     routing_profile: default
+#     validation:
+#       source: repository          # read .ai-workflow/project.yaml
+#
+#   hefesto-web:
+#     enabled: true
+#     repository:
+#       path: H:/Code/Pessoais/hefesto-web
+#       github: JPClow3/hefesto-web
+#       base_branch: main
+#     linear:
+#       project: Hefesto
+#     knowledge:
+#       status: unverified
+#     routing_profile: default
+#     validation:
+#       source: repository
+
+# Multi-repository Linear projects. An issue body containing `repo:hefesto-web`
+# overrides the default. If the controller cannot resolve exactly one
+# repository, it applies `ai-needs-context` rather than guessing.
+#
+# groups:
+#   hefesto:
+#     linear_project: Hefesto
+#     default_repository: hefesto-backend
+#     repositories:
+#       - hefesto-backend
+#       - hefesto-web
+
+groups: {}

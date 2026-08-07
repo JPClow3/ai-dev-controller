@@ -1,0 +1,88 @@
+version: 1
+
+# Composite score per worker attempt. Weights sum to 1.00.
+weights:
+  acceptance_criteria: 0.35
+  first_pass_ci: 0.25
+  reviewer_defects: 0.15
+  churn: 0.10
+  resource_cost: 0.10
+  wall_clock: 0.05
+
+acceptance_criteria:
+  verdicts: [PASS, PARTIAL, FAIL, UNCERTAIN]
+  points:
+    PASS: 1.0
+    PARTIAL: 0.5
+    FAIL: 0.0
+    UNCERTAIN: 0.25
+  require_evidence: true      # reviewer must cite code or test evidence
+
+first_pass_ci:
+  full_credit: ci_green_without_remediation
+  penalty_per_remediation_cycle: 0.35
+  floor: 0.0
+
+reviewer_defects:
+  severity_penalty:
+    critical: 1.00
+    high: 0.55
+    medium: 0.20
+    low: 0.05
+  floor: 0.0
+
+churn:
+  penalise:
+    unrelated_refactor: 0.30
+    unnecessary_dependency: 0.30
+    reformatting_unrelated_files: 0.20
+    duplicate_abstraction: 0.25
+    excessive_generated_code: 0.20
+  floor: 0.0
+
+resource_cost:
+  # Normalised subscription pressure, not theoretical API dollars.
+  metric: provider_quota_consumed_x_scarcity_multiplier
+  normalise_against: rolling_p90_of_task_category
+
+wall_clock:
+  # Deliberately small. Better code is worth five more minutes.
+  target_minutes_by_category:
+    mechanical_issue_cleanup: 4
+    small_mechanical_change: 8
+    routine_bugfix: 15
+    multi_file_feature: 40
+    architecture_planning: 25
+  penalty_per_target_multiple: 0.25
+
+champion_challenger:
+  exploration_rate: 0.15
+  eligible_risk: [low]
+  # Never run champion and challenger on the same issue - sample over time.
+  dual_run: false
+  worker_identity_keys: [provider, model, effort, harness]
+
+promotion:
+  low_risk:
+    automatic: true
+    minimum_challenger_samples: 12
+    minimum_score_advantage: 0.08
+    minimum_success_rate: 0.70
+  medium_risk:
+    automatic: false
+    propose_after_samples: 12
+  high_risk:
+    automatic: false
+    experimentation: false
+
+  # Every automatic change is journalled to routing_history with a rollback ref.
+  record_rationale: true
+  rollback_window_days: 30
+
+aggregation_levels:
+  - global
+  - repository
+  - task_category
+  - model
+  - effort
+  - harness

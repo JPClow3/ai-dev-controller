@@ -1,0 +1,172 @@
+version: 1
+
+# Worker identity is model + reasoning effort + harness. Not just "Luna".
+# Add or retire candidates here; never hard-code model names in src/.
+
+workers:
+  deepseek_flash:
+    provider: ollama
+    model: deepseek-v4-flash:cloud
+    harness: ollama-cloud
+    context: 1000000
+    usage_class: medium
+    thinking: low
+
+  glm_5_2:
+    provider: ollama
+    model: glm-5.2:cloud
+    harness: ollama-cloud
+    context: 976000
+    usage_class: high
+
+  kimi_code:
+    provider: ollama
+    model: kimi-k2.7-code:cloud
+    harness: ollama-cloud
+    context: 256000
+    usage_class: high
+
+  deepseek_max:
+    provider: ollama
+    model: deepseek-v4-max:cloud
+    harness: ollama-cloud
+    context: 1000000
+    usage_class: high
+
+  luna_low:
+    provider: openai
+    model: gpt-5.6-luna
+    effort: low
+    harness: codex
+  luna_high:
+    provider: openai
+    model: gpt-5.6-luna
+    effort: high
+    harness: codex
+  luna_xhigh:
+    provider: openai
+    model: gpt-5.6-luna
+    effort: xhigh
+    harness: codex
+
+  terra_high:
+    provider: openai
+    model: gpt-5.6-terra
+    effort: high
+    harness: codex
+  terra_xhigh:
+    provider: openai
+    model: gpt-5.6-terra
+    effort: xhigh
+    harness: codex
+
+  sol_xhigh:
+    provider: openai
+    model: gpt-5.6-sol
+    effort: xhigh
+    harness: codex
+
+families:
+  gpt: [luna_low, luna_high, luna_xhigh, terra_high, terra_xhigh, sol_xhigh]
+  deepseek: [deepseek_flash, deepseek_max]
+  kimi: [kimi_code]
+  glm: [glm_5_2]
+
+# Aliases the orchestration code refers to. Model churn changes this file only.
+aliases:
+  cheap_structured:
+    candidates: [deepseek_flash, luna_low]
+  routine_worker:
+    candidates: [luna_high, deepseek_flash, kimi_code]
+  complex_worker:
+    candidates: [kimi_code, luna_xhigh, terra_high]
+  large_context:
+    candidates: [glm_5_2, deepseek_max, terra_high]
+  orchestrator:
+    candidates: [terra_high, glm_5_2]
+  high_risk:
+    candidates: [sol_xhigh, glm_5_2]
+  independent_review:
+    strategy: least_involved_family
+
+# Starting hypothesis, not permanent truth. Promotion rules in scoring.yaml
+# rewrite the per-repository champion over time.
+matrix:
+  mechanical_issue_cleanup:
+    champion: deepseek_flash
+    challenger: luna_low
+    escalation: [luna_low, luna_high]
+  ambiguous_requirement_cleanup:
+    champion: luna_high
+    challenger: glm_5_2
+    escalation: [terra_high]
+  docs_indexing:
+    champion: deepseek_flash
+    challenger: luna_low
+    escalation: [glm_5_2]
+  small_mechanical_change:
+    champion: deepseek_flash
+    challenger: luna_high
+    escalation: [kimi_code]
+  routine_behavior_change:
+    champion: luna_high
+    challenger: deepseek_flash
+    escalation: [luna_xhigh, terra_high]
+  routine_bugfix:
+    champion: luna_high
+    challenger: kimi_code
+    escalation: [terra_high]
+  unit_test_generation:
+    champion: deepseek_flash
+    challenger: luna_high
+    escalation: [kimi_code]
+  integration_test:
+    champion: kimi_code
+    challenger: luna_high
+    escalation: [terra_high]
+  multi_file_feature:
+    champion: kimi_code
+    challenger: luna_high
+    escalation: [terra_high]
+  large_context_repo_work:
+    champion: glm_5_2
+    challenger: deepseek_max
+    escalation: [terra_high, sol_xhigh]
+  architecture_planning:
+    champion: terra_high
+    challenger: glm_5_2
+    escalation: [sol_xhigh]
+  orchestration:
+    champion: terra_high
+    challenger: glm_5_2
+    escalation: [sol_xhigh]
+  high_risk_orchestration:
+    champion: sol_xhigh
+    challenger: null
+    escalation: [BLOCKED_HUMAN]
+  integration_review:
+    strategy: opposite_family_from_authors
+    escalation: [sol_xhigh]
+  final_review:
+    strategy: least_involved_family
+    escalation: [sol_xhigh]
+
+# Subscriptions are flat-ish. Track scarcity, not fake API dollars.
+resource_pressure:
+  states: [LOW, NORMAL, HIGH, EXHAUSTED]
+  default: NORMAL
+  scarcity_multiplier:
+    LOW: 0.6
+    NORMAL: 1.0
+    HIGH: 2.0
+    EXHAUSTED: 999.0
+  sources:
+    - cli_rate_limit_headers
+    - orca_usage_report
+    - request_failure_rate
+    - manual_override
+  # utility = expected_score - scarcity_penalty - latency_penalty
+  utility_weights:
+    expected_score: 1.0
+    scarcity_penalty: 0.25
+    latency_penalty: 0.05

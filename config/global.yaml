@@ -1,0 +1,102 @@
+version: 1
+
+# Global controller policy. Repository-specific overrides live in
+# projects/registry.yaml; framework-specific validation lives in each
+# repository's .ai-workflow/project.yaml.
+
+concurrency:
+  active_issues: 4
+  workers_per_issue: 3
+  global_agents: 7
+
+  gpt_heavy_agents: 2      # Terra / Sol
+  gpt_luna_workers: 3
+  ollama_workers: 3
+
+  agents_per_repository: 5
+
+scheduler:
+  poll_interval_seconds: 45
+  # Lower number = higher priority. Finishing beats starting.
+  priorities:
+    P0_human_unblocked: 0
+    P1_final_review_pr: 1
+    P2_ci_remediation: 2
+    P3_integration: 3
+    P4_active_issue_worker: 4
+    P5_new_ready_issue: 5
+    P6_challenger_experiment: 6
+    P7_maintenance: 7
+
+  # Throttle new starts when these are true.
+  backpressure:
+    remediation_backlog_threshold: 4
+    provider_pressure_halt_at: EXHAUSTED
+
+linear:
+  labels:
+    curate: ai-curate
+    needs_context: ai-needs-context
+    ready: ai-ready
+    running: ai-running
+    blocked: ai-blocked
+    reviewing: ai-reviewing
+    pr_open: ai-pr-open
+  # The controller trusts only explicit blockedBy relations.
+  trust_inferred_dependencies: false
+
+git:
+  branch_prefix: ai/
+  bootstrap_branch: ai/bootstrap-project-knowledge
+  # Always re-fetch and branch from the newest base before starting an issue.
+  always_fresh_base: true
+
+github:
+  draft_prs: true
+  auto_merge: false          # never. you are the merge authority.
+  ci_is_authoritative: true
+
+knowledge:
+  # Soft gate: work may proceed while the bootstrap PR is still open.
+  allow_unverified_execution: true
+  bootstrap_scan_globs:
+    - "**/AGENTS.md"
+    - "**/CLAUDE.md"
+    - "**/GEMINI.md"
+    - "**/README*.md"
+    - "**/CONTRIBUTING*.md"
+    - "docs/**/*.md"
+    - "design/**/*.md"
+    - "architecture/**/*.md"
+    - "specs/**/*.md"
+    - ".ai/**/*.md"
+    - ".cursor/**/*.md"
+    - "*.md"
+  bootstrap_exclude_globs:
+    - "node_modules/**"
+    - "vendor/**"
+    - "dist/**"
+    - "build/**"
+    - "generated/**"
+    - "docs/archive/**"
+
+safety:
+  # Hard stops. Workers may WRITE code that does these; they may never EXECUTE them.
+  forbidden_operations:
+    - production_database_mutation
+    - production_deployment
+    - remote_resource_deletion
+    - production_secret_rotation
+    - force_push_protected_branch
+    - pr_merge
+    - branch_protection_change
+    - destructive_cloud_operation
+
+orca:
+  bin: orca
+  json_output: true
+  child_worktrees: true
+
+paths:
+  database: ./data/controller.db
+  registry: ./projects/registry.yaml

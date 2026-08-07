@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-dev-controller/schemas/review.schema.json",
+  "title": "Review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "issue_id", "stage", "reviewer", "criteria"],
+  "properties": {
+    "verdict": { "enum": ["approve", "request_changes", "escalate"] },
+    "issue_id": { "type": "string" },
+    "stage": { "enum": ["integration", "final"] },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "family": { "type": "string" },
+        "selection_reason": {
+          "enum": ["opposite_family_from_authors", "least_involved_family", "escalation", "manual"]
+        }
+      }
+    },
+    "diff_sha": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "category", "file", "explanation", "suggested_validation"],
+        "properties": {
+          "severity": { "enum": ["critical", "high", "medium", "low"] },
+          "category": {
+            "enum": [
+              "correctness",
+              "security",
+              "data_integrity",
+              "performance",
+              "error_handling",
+              "test_coverage",
+              "conventions",
+              "churn",
+              "scope_violation"
+            ]
+          },
+          "acceptance_criterion": {
+            "type": ["string", "null"],
+            "pattern": "^(AC-[0-9]+)$"
+          },
+          "file": { "type": "string" },
+          "lines": { "type": "string" },
+          "explanation": { "type": "string", "minLength": 1 },
+          "suggested_validation": {
+            "type": "string",
+            "description": "A test or command that would demonstrate the defect and later the fix."
+          }
+        }
+      }
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
+          "status": { "enum": ["satisfied", "unsatisfied", "uncertain"] },
+          "evidence": { "type": "string" }
+        }
+      }
+    },
+    "escalation_reason": { "type": "string" },
+    "summary": { "type": "string" },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wall_clock_seconds": { "type": "number", "minimum": 0 },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "const": "escalate" } }, "required": ["verdict"] },
+      "then": { "required": ["escalation_reason"] }
+    }
+  ]
+}

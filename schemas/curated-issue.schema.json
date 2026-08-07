@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-dev-controller/schemas/curated-issue.schema.json",
+  "title": "CuratedIssue",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "issue_id"],
+  "properties": {
+    "verdict": {
+      "enum": ["curated", "needs_context"]
+    },
+    "issue_id": { "type": "string", "minLength": 1 },
+    "repository": {
+      "type": ["string", "null"],
+      "description": "Registry project id. null when unresolvable."
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "body": {
+      "type": "string",
+      "description": "Markdown with the mandated section headings."
+    },
+    "task_category": {
+      "type": "string",
+      "description": "Key from config/routing.yaml -> matrix"
+    },
+    "risk": { "enum": ["low", "medium", "high"] },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "statement"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
+          "statement": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["behaviour", "regression", "coverage", "performance", "security"] },
+          "verification_hint": { "type": "string" }
+        }
+      }
+    },
+    "relevant_paths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "needs_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "questions"],
+      "properties": {
+        "reason": {
+          "enum": [
+            "undocumented_product_decision",
+            "contradictory_authoritative_docs",
+            "repository_unresolvable",
+            "issue_covers_multiple_changes"
+          ]
+        },
+        "questions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "candidate_repositories": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "dependency_proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["blocked_issue", "blocking_issue", "acceptance_criterion", "reason"],
+        "properties": {
+          "blocked_issue": { "type": "string" },
+          "blocking_issue": { "type": "string" },
+          "acceptance_criterion": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "const": "curated" } }, "required": ["verdict"] },
+      "then": {
+        "required": ["repository", "title", "body", "task_category", "risk", "acceptance_criteria"],
+        "properties": { "repository": { "type": "string" } }
+      }
+    },
+    {
+      "if": { "properties": { "verdict": { "const": "needs_context" } }, "required": ["verdict"] },
+      "then": { "required": ["needs_context"] }
+    }
+  ]
+}

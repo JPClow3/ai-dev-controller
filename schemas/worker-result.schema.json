@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-dev-controller/schemas/worker-result.schema.json",
+  "title": "WorkerResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "issue_id", "task_id", "worker"],
+  "properties": {
+    "verdict": {
+      "enum": ["complete", "partial", "failed", "scope_conflict", "needs_context"]
+    },
+    "issue_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "description": "Key from config/routing.yaml -> workers" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "effort": { "type": "string" },
+        "harness": { "type": "string" }
+      }
+    },
+    "branch": { "type": "string" },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sha", "message"],
+        "properties": {
+          "sha": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "change"],
+        "properties": {
+          "path": { "type": "string" },
+          "change": { "enum": ["added", "modified", "deleted", "renamed"] },
+          "insertions": { "type": "integer", "minimum": 0 },
+          "deletions": { "type": "integer", "minimum": 0 },
+          "outside_ownership": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "verdict"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
+          "verdict": { "enum": ["PASS", "PARTIAL", "FAIL", "UNCERTAIN"] },
+          "evidence": {
+            "type": "string",
+            "description": "Test name, file:line, or observable behaviour. Required for PASS."
+          }
+        }
+      }
+    },
+    "validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "command", "exit_code"],
+        "properties": {
+          "name": { "type": "string" },
+          "command": { "type": "string" },
+          "exit_code": { "type": "integer" },
+          "output_tail": { "type": "string" }
+        }
+      }
+    },
+    "scope_conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "owning_task", "reason"],
+      "properties": {
+        "path": { "type": "string" },
+        "owning_task": { "type": ["string", "null"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "missing_context": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "new_dependencies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Package dependencies added. Non-empty is penalised unless a criterion required it."
+    },
+    "notes": { "type": "string" },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wall_clock_seconds": { "type": "number", "minimum": 0 },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "const": "scope_conflict" } }, "required": ["verdict"] },
+      "then": { "required": ["scope_conflict"] }
+    },
+    {
+      "if": { "properties": { "verdict": { "const": "needs_context" } }, "required": ["verdict"] },
+      "then": { "required": ["missing_context"] }
+    }
+  ]
+}

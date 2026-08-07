@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Controller state - machine-local, never committed
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Secrets
+.env
+.env.local
+
+# Local operator overrides
+config/local.yaml
+projects/registry.local.yaml
+
+# Logs / scratch
+logs/
+*.log
+.tmp/

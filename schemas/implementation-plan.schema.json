@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-dev-controller/schemas/implementation-plan.schema.json",
+  "title": "ImplementationPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "issue_id"],
+  "properties": {
+    "verdict": { "enum": ["planned", "blocked"] },
+    "issue_id": { "type": "string" },
+    "repository": { "type": "string" },
+    "base_branch": { "type": "string" },
+    "summary": { "type": "string" },
+    "blocked": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "question"],
+      "properties": {
+        "reason": {
+          "enum": [
+            "undocumented_product_decision",
+            "contradictory_authoritative_docs",
+            "undeclared_dependency",
+            "destructive_operation_required"
+          ]
+        },
+        "question": { "type": "string" }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "summary", "task_category", "owns", "acceptance_criteria"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "summary": { "type": "string" },
+          "task_category": { "type": "string" },
+          "recommended_alias": {
+            "enum": [
+              "cheap_structured",
+              "routine_worker",
+              "complex_worker",
+              "large_context",
+              "orchestrator",
+              "high_risk"
+            ]
+          },
+          "owns": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Glob set. Must be disjoint from any task not in blocked_by chain."
+          },
+          "blocked_by": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "pattern": "^AC-[0-9]+$" }
+          },
+          "context_requirements": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "agents_md",
+                "architecture_summary",
+                "conventions_summary",
+                "testing_summary",
+                "domain_docs",
+                "affected_sources"
+              ]
+            }
+          },
+          "validation": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Names of repository validation commands to run locally."
+          },
+          "risk": { "enum": ["low", "medium", "high"], "default": "low" },
+          "risk_reason": { "type": "string" },
+          "estimated_minutes": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "const": "planned" } }, "required": ["verdict"] },
+      "then": { "required": ["repository", "base_branch", "tasks"] }
+    },
+    {
+      "if": { "properties": { "verdict": { "const": "blocked" } }, "required": ["verdict"] },
+      "then": { "required": ["blocked"] }
+    }
+  ]
+}

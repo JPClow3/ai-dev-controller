@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-dev-controller/schemas/failure.schema.json",
+  "title": "FailureClassification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["class", "confidence", "root_cause", "blast_radius", "evidence"],
+  "properties": {
+    "class": {
+      "enum": [
+        "mechanical",
+        "localized_logic",
+        "missing_repository_context",
+        "architecture_or_integration",
+        "flaky_or_environmental",
+        "requirement_ambiguity",
+        "unknown"
+      ]
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "issue_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "failed_worker": { "type": "string" },
+    "root_cause": { "type": "string", "minLength": 1 },
+    "blast_radius": {
+      "enum": ["single_file", "single_task", "cross_task", "system"]
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "excerpt"],
+        "properties": {
+          "source": { "enum": ["local_validation", "ci", "reviewer", "diff"] },
+          "file": { "type": "string" },
+          "lines": { "type": "string" },
+          "excerpt": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "remediation_packet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_criteria": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^AC-[0-9]+$" }
+        },
+        "files": { "type": "array", "items": { "type": "string" } },
+        "failure_output": { "type": "string" },
+        "instruction": {
+          "type": "string",
+          "description": "Minimum useful instruction. Not a restatement of the whole task."
+        }
+      }
+    },
+    "requires_human": {
+      "type": "boolean",
+      "default": false,
+      "description": "Set true for requirement_ambiguity. The controller routes to BLOCKED_HUMAN."
+    },
+    "human_question": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "class": { "const": "requirement_ambiguity" } },
+        "required": ["class"]
+      },
+      "then": { "required": ["human_question"] }
+    }
+  ]
+}
