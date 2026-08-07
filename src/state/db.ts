@@ -1,48 +1,45 @@
-import { DatabaseSync } from 'node:sqlite';
-import { resolve } from 'node:path';
+import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
-import { configRoot } from '../config/index.js';
+import { dirname, resolve } from 'node:path';
+import { applyMigrations } from './migrations.js';
 
-/**
- * Node's built-in SQLite. Chosen over better-sqlite3 so the controller needs no
- * native toolchain on Windows - `git clone && npm install` just works.
- *
- * Single local writer. WAL, foreign keys on, synchronous NORMAL.
- */
-let handle: DatabaseSync | null = null;
-
-export function db(): DatabaseSync {
-  if (handle) return handle;
-  const path = resolve(configRoot(), process.env['AI_DEV_DB'] ?? './data/controller.db');
-  mkdirSync(resolve(path, '..'), { recursive: true });
-  handle = new DatabaseSync(path);
-  handle.exec('PRAGMA journal_mode = WAL');
-  handle.exec('PRAGMA foreign_keys = ON');
-  handle.exec('PRAGMA synchronous = NORMAL');
-  return handle;
+export interface ControllerDatabase {
+  readonly raw: Database.Database;
+  transaction<T>(fn: () => T): T;
+  close(): void;
 }
 
 /**
- * Every claim and every state transition runs inside one of these.
+ * Opens (and migrates) the controller database.
  *
- * The partial unique index `idx_runs_one_active` is what actually prevents
- * duplicate runs; this makes the read-then-write around it atomic. IMMEDIATE
- * takes the write lock up front rather than failing late on upgrade.
+ * WAL plus a single writer process. `:memory:` is honoured for tests.
  */
-export function transaction<T>(fn: () => T): T {
-  const conn = db();
-  conn.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    conn.exec('COMMIT');
-    return result;
-  } catch (err) {
-    conn.exec('ROLLBACK');
-    throw err;
+export function openDatabase(path: string): ControllerDatabase {
+  if (path !== ':memory:') {
+    const absolute = resolve(path);
+    mkdirSync(dirname(absolute), { recursive: true });
+    path = absolute;
   }
-}
 
-export function closeDb(): void {
-  handle?.close();
-  handle = null;
+  const raw = new Database(path);
+  if (path !== ':memory:') raw.pragma('journal_mode = WAL');
+  raw.pragma('foreign_keys = ON');
+  raw.pragma('synchronous = NORMAL');
+  applyMigrations(raw);
+
+  return {
+    raw,
+    /**
+     * IMMEDIATE takes the write lock up front. Claim logic reads then writes,
+     * and a deferred transaction would only discover the conflict on upgrade —
+     * after the read that decided it was safe to proceed.
+     */
+    transaction<T>(fn: () => T): T {
+      const wrapped = raw.transaction(fn);
+      return wrapped.immediate();
+    },
+    close(): void {
+      raw.close();
+    },
+  };
 }

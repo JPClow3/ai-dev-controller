@@ -1,0 +1,15 @@
+allowBuilds:
+  better-sqlite3: set this to true or false
+  esbuild: set this to true or false
+# pnpm blocks dependency install scripts by default and treats un-triaged ones
+# as an error. Both of these are triaged and deliberately skipped:
+#
+#   better-sqlite3  ships prebuilt .node binaries for win32/darwin/linux in
+#                   `prebuilds/`, so the node-gyp compile is unnecessary.
+#                   (v11 did NOT have a Node 26 prebuild; v13 does. That is
+#                   why this project pins ^13, not the plan's ^11.)
+#   esbuild         resolves its platform binary through the
+#                   @esbuild/<platform> optional dependency.
+ignoredBuiltDependencies:
+  - better-sqlite3
+  - esbuild

@@ -1,158 +1,119 @@
-version: 1
-
-# Worker identity is model + reasoning effort + harness. Not just "Luna".
-# Add or retire candidates here; never hard-code model names in src/.
-
-workers:
-  deepseek_flash:
-    provider: ollama
-    model: deepseek-v4-flash:cloud
-    harness: ollama-cloud
-    context: 1000000
-    usage_class: medium
-    thinking: low
-
-  glm_5_2:
-    provider: ollama
-    model: glm-5.2:cloud
-    harness: ollama-cloud
-    context: 976000
-    usage_class: high
-
-  kimi_code:
-    provider: ollama
-    model: kimi-k2.7-code:cloud
-    harness: ollama-cloud
-    context: 256000
-    usage_class: high
-
-  deepseek_max:
-    provider: ollama
-    model: deepseek-v4-max:cloud
-    harness: ollama-cloud
-    context: 1000000
-    usage_class: high
-
-  luna_low:
-    provider: openai
-    model: gpt-5.6-luna
-    effort: low
-    harness: codex
-  luna_high:
-    provider: openai
-    model: gpt-5.6-luna
-    effort: high
-    harness: codex
-  luna_xhigh:
-    provider: openai
-    model: gpt-5.6-luna
-    effort: xhigh
-    harness: codex
-
-  terra_high:
-    provider: openai
-    model: gpt-5.6-terra
-    effort: high
-    harness: codex
-  terra_xhigh:
-    provider: openai
-    model: gpt-5.6-terra
-    effort: xhigh
-    harness: codex
-
-  sol_xhigh:
-    provider: openai
-    model: gpt-5.6-sol
-    effort: xhigh
-    harness: codex
-
-families:
-  gpt: [luna_low, luna_high, luna_xhigh, terra_high, terra_xhigh, sol_xhigh]
-  deepseek: [deepseek_flash, deepseek_max]
-  kimi: [kimi_code]
-  glm: [glm_5_2]
-
-# Aliases the orchestration code refers to. Model churn changes this file only.
+# Worker identity is model + reasoning effort + harness. Every alias below is
+# a separate competitor in routing statistics: luna_high and luna_xhigh are
+# not the same worker.
+#
+# `profile` is the Codex profile name in ~/.codex/config.toml. Ollama Cloud
+# runs behind the same Codex harness so all families are compared through one
+# interface rather than across two different agent harnesses.
 aliases:
-  cheap_structured:
-    candidates: [deepseek_flash, luna_low]
-  routine_worker:
-    candidates: [luna_high, deepseek_flash, kimi_code]
-  complex_worker:
-    candidates: [kimi_code, luna_xhigh, terra_high]
-  large_context:
-    candidates: [glm_5_2, deepseek_max, terra_high]
-  orchestrator:
-    candidates: [terra_high, glm_5_2]
-  high_risk:
-    candidates: [sol_xhigh, glm_5_2]
-  independent_review:
-    strategy: least_involved_family
+  deepseek_flash:
+    family: deepseek
+    harness: codex
+    provider: ollama
+    profile: ollama-deepseek
+    context_window: 1000000
+    usage_class: medium
+  kimi_code:
+    family: kimi
+    harness: codex
+    provider: ollama
+    profile: ollama-kimi
+    context_window: 256000
+    usage_class: high
+  glm_5_2:
+    family: glm
+    harness: codex
+    provider: ollama
+    profile: ollama-glm
+    context_window: 976000
+    usage_class: high
+  luna_low:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-luna-low
+  luna_high:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-luna-high
+  luna_xhigh:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-luna-xhigh
+  terra_high:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-terra-high
+  terra_xhigh:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-terra-xhigh
+  sol_xhigh:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-sol-xhigh
 
 # Starting hypothesis, not permanent truth. Promotion rules in scoring.yaml
-# rewrite the per-repository champion over time.
-matrix:
-  mechanical_issue_cleanup:
+# rewrite the per-repository champion as evidence accumulates.
+roles:
+  issue_cleanup:
     champion: deepseek_flash
-    challenger: luna_low
-    escalation: [luna_low, luna_high]
-  ambiguous_requirement_cleanup:
+    challengers: [luna_low]
+  requirement_cleanup:
+    champion: luna_low
+    challengers: [glm_5_2]
+  routine_mechanical:
+    champion: deepseek_flash
+    challengers: [luna_high]
+  routine_behavior:
     champion: luna_high
-    challenger: glm_5_2
-    escalation: [terra_high]
-  docs_indexing:
-    champion: deepseek_flash
-    challenger: luna_low
-    escalation: [glm_5_2]
-  small_mechanical_change:
-    champion: deepseek_flash
-    challenger: luna_high
-    escalation: [kimi_code]
-  routine_behavior_change:
-    champion: luna_high
-    challenger: deepseek_flash
-    escalation: [luna_xhigh, terra_high]
+    challengers: [deepseek_flash, kimi_code]
   routine_bugfix:
     champion: luna_high
-    challenger: kimi_code
-    escalation: [terra_high]
-  unit_test_generation:
+    challengers: [kimi_code]
+  unit_tests:
     champion: deepseek_flash
-    challenger: luna_high
-    escalation: [kimi_code]
-  integration_test:
-    champion: kimi_code
-    challenger: luna_high
-    escalation: [terra_high]
+    challengers: [luna_high, kimi_code]
   multi_file_feature:
     champion: kimi_code
-    challenger: luna_high
-    escalation: [terra_high]
-  large_context_repo_work:
+    challengers: [luna_high]
+  large_context:
     champion: glm_5_2
-    challenger: deepseek_max
-    escalation: [terra_high, sol_xhigh]
-  architecture_planning:
+    challengers: [terra_high]
+  orchestrator:
     champion: terra_high
-    challenger: glm_5_2
-    escalation: [sol_xhigh]
-  orchestration:
-    champion: terra_high
-    challenger: glm_5_2
-    escalation: [sol_xhigh]
-  high_risk_orchestration:
+    challengers: [glm_5_2]
+  high_risk:
     champion: sol_xhigh
-    challenger: null
-    escalation: [BLOCKED_HUMAN]
-  integration_review:
-    strategy: opposite_family_from_authors
-    escalation: [sol_xhigh]
-  final_review:
-    strategy: least_involved_family
-    escalation: [sol_xhigh]
+    challengers: []
 
-# Subscriptions are flat-ish. Track scarcity, not fake API dollars.
-resource_pressure:
+# Risk gates. Experimentation only ever happens on low-risk work.
+risk_gates:
+  low:
+    allow_challenger: true
+  medium:
+    allow_challenger: false
+  high:
+    allow_challenger: false
+    locked_role: high_risk
+
+# Reviewer selection is by authorship, not a rigid rule.
+review:
+  integration:
+    strategy: opposite_family_from_authors
+  final:
+    strategy: least_involved_family
+  escalation: sol_xhigh
+
+# Subscriptions are flat-ish, so the router tracks scarcity rather than
+# pretending each token costs API dollars.
+#   utility = expected_score - scarcity_penalty - latency_penalty
+pressure:
   states: [LOW, NORMAL, HIGH, EXHAUSTED]
   default: NORMAL
   scarcity_multiplier:
@@ -160,13 +121,12 @@ resource_pressure:
     NORMAL: 1.0
     HIGH: 2.0
     EXHAUSTED: 999.0
-  sources:
-    - cli_rate_limit_headers
-    - orca_usage_report
-    - request_failure_rate
-    - manual_override
-  # utility = expected_score - scarcity_penalty - latency_penalty
   utility_weights:
     expected_score: 1.0
     scarcity_penalty: 0.25
     latency_penalty: 0.05
+  sources:
+    - orca_account_rate_limits
+    - cli_rate_limit_headers
+    - request_failure_rate
+    - manual_override

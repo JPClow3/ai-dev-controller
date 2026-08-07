@@ -1,61 +1,41 @@
-import type { LinearLabel } from '../types/index.js';
-import { NotImplementedError } from '../util/errors.js';
+import { LinearClient } from '@linear/sdk';
+
+let cached: LinearClient | null = null;
+
+export class LinearConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LinearConfigError';
+  }
+}
 
 /**
  * Linear expresses intent and dependency state. The controller decides what is
  * mechanically runnable.
- *
- * We deliberately do NOT mirror internal agent state into Linear. Things like
- * worker_retry_2, glm_review or ci_pending belong in the controller and Orca -
- * putting them in the issue tracker turns it into a log.
  */
-
-export interface LinearIssue {
-  id: string;
-  identifier: string;
-  title: string;
-  description: string;
-  labels: string[];
-  projectName: string | null;
-  blockedBy: string[];
-  url: string;
+export function getLinearClient(): LinearClient {
+  if (cached) return cached;
+  const apiKey = process.env['LINEAR_API_KEY'];
+  if (!apiKey) {
+    throw new LinearConfigError('LINEAR_API_KEY is not set. Copy .env.example to .env and fill it in.');
+  }
+  cached = new LinearClient({ apiKey });
+  return cached;
 }
 
-export function client(): unknown {
-  throw new NotImplementedError('linear.client');
-}
-
-export async function fetchIssuesWithLabel(_label: LinearLabel): Promise<LinearIssue[]> {
-  throw new NotImplementedError('linear.fetchIssuesWithLabel');
-}
-
-/** Explicit relations only. `trust_inferred_dependencies` is false. */
-export async function fetchDependencies(_issueId: string): Promise<string[]> {
-  throw new NotImplementedError('linear.fetchDependencies');
-}
-
-export async function setLabel(_issueId: string, _label: LinearLabel): Promise<void> {
-  throw new NotImplementedError('linear.setLabel');
-}
-
-/** Curated body write-back. Never touches the original description history. */
-export async function updateIssueBody(_issueId: string, _body: string): Promise<void> {
-  throw new NotImplementedError('linear.updateIssueBody');
+/** Test seam. */
+export function setLinearClient(client: LinearClient | null): void {
+  cached = client;
 }
 
 /**
- * Dependency proposals are posted as comments for human approval. The AI never
- * mutates the DAG - once you approve the relation in Linear it becomes
- * authoritative, and only then does the scheduler see it.
+ * GraphQL can return data alongside errors. A partially-successful response is
+ * treated as a failure: acting on a truncated issue list would look like
+ * "these issues no longer need work", which is the wrong direction to be
+ * wrong in.
  */
-export async function postDependencyProposal(
-  _issueId: string,
-  _blockingIssue: string,
-  _reason: string,
-): Promise<string> {
-  throw new NotImplementedError('linear.postDependencyProposal');
-}
-
-export async function postBlockerQuestion(_issueId: string, _question: string): Promise<void> {
-  throw new NotImplementedError('linear.postBlockerQuestion');
+export function assertNoPartialErrors(response: { errors?: unknown[] } | undefined, operation: string): void {
+  if (response?.errors && response.errors.length > 0) {
+    throw new Error(`Linear ${operation} returned partial errors: ${JSON.stringify(response.errors)}`);
+  }
 }

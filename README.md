@@ -1,11 +1,11 @@
 # ai-dev-controller
 
-Thin deterministic controller underneath Orca. It decides **what is allowed to run**;
+Deterministic controller underneath Orca. It decides **what is allowed to run**;
 Orca **runs it**.
 
-The controller owns state, dependency waves, concurrency, routing policy, escalation
-budgets, and scoring. It does not run models itself except for small structured
-classification calls.
+The controller owns workflow state, dependency waves, concurrency, routing
+policy, escalation budgets, scoring, and recovery. It does not run models
+itself except for small structured classification calls.
 
 ## Interfaces you actually use
 
@@ -15,63 +15,67 @@ classification calls.
 | Orca | Watch agents, intervene on real problems. |
 | GitHub | Review and merge draft PRs. |
 
-The controller is infrastructure. The CLI is an escape hatch, not a daily tool.
-
-## Layout
-
-```
-config/     global, routing, escalation, scoring policy
-projects/   repository registry
-prompts/    agent role prompts (curator, planner, worker, reviewers, ...)
-schemas/    JSON Schemas every model response is validated against
-src/        deterministic TypeScript
-  linear/     issue sync, labels, dependency reads
-  scheduler/  DAG, waves, capacity, priority queue
-  routing/    model aliases, resource pressure, champion/challenger selection
-  scoring/    composite score, promotion rules
-  state/      SQLite persistence, state machine, idempotency, recovery
-  orca/       Orca CLI adapter (worktrees, agent sessions)
-  github/     PR + CI synchronisation
-  knowledge/  repository onboarding, knowledge map, context packets
-cli/        `ai-dev` commands
-data/       controller.db (gitignored)
-```
-
-## Hard boundaries
-
-The controller enforces these; no model can override them.
-
-- A dependency is satisfied **only when its PR is merged** into the base branch.
-- Every issue starts from a freshly fetched base branch.
-- Models return *recommended* state transitions. The controller validates preconditions
-  and performs the write.
-- Never merge, never push to `main`, never force-push protected branches, never run
-  destructive operations against production.
-- Retry budgets are finite. Exhaustion means `BLOCKED_HUMAN`, not another attempt.
+The controller is infrastructure. The CLI is an escape hatch, not a daily tool,
+and v1 deliberately ships no web dashboard.
 
 ## Setup
 
 ```powershell
-copy .env.example .env    # fill in LINEAR_API_KEY, GITHUB_TOKEN, OLLAMA_API_KEY
-npm install
-npm run migrate
-npm run dev -- status
+pnpm install
+copy .env.example .env    # fill in LINEAR_API_KEY
+pnpm cli migrate
+pnpm cli config
 ```
 
-## CLI
+Requires Node >= 24 (developed on 26.4.0), the Orca desktop app running with
+its CLI enabled, and Codex signed in via ChatGPT.
+
+## Status
+
+Tasks 1–5 implemented. 105 tests, typecheck clean.
 
 ```
-ai-dev status                 current runs and slot usage
-ai-dev projects               registered repositories
-ai-dev onboard <path>         register a repo, open knowledge-bootstrap PR
-ai-dev inspect <ISSUE>        full run detail
-ai-dev pause|resume|cancel|retry <ISSUE>
-ai-dev routes                 effective routing table + resource pressure
-ai-dev metrics                champion/challenger statistics
+src/config/      config contract, Zod schemas, snake_case -> camelCase
+src/state/       SQLite persistence, run claims, audit trail
+src/workflow/    state machine, transition guards, Linear projection
+src/linear/      issue polling, labels, explicit dependency reads
+src/projects/    repository resolution
+src/knowledge/   documentation discovery and knowledge map
+src/scheduler/   dependency waves, capacity, priority
+src/cli/         ai-dev commands
 ```
 
-## Implementation status
+Tasks 6–14 (routing logic, Orca adapter, CI, review, scoring, recovery,
+runner, pilot) are specified in `docs/implementation-plan.md`.
 
-This repository is a scaffold. `config/`, `prompts/`, `schemas/` and the SQLite schema
-are complete and authoritative. `src/` contains typed module contracts with
-`NOT_IMPLEMENTED` bodies. See `docs/v1-scope.md` for the exact v1 checklist.
+## Hard boundaries
+
+Enforced by the controller; no model can override them.
+
+- A dependency is satisfied **only when its PR is merged** into the base branch.
+  Not when the worker finished, tests passed, the PR opened, or a reviewer
+  approved. There are tests for each of those.
+- Every issue starts from a freshly fetched base branch.
+- Models return *recommended* transitions. The controller verifies mechanical
+  preconditions independently and performs the write.
+- Only a human applies `ai-ready`. It is not in the controller's writable
+  label set.
+- Never merge, never push to the base branch, never force-push protected
+  branches, never run destructive operations against production.
+- Retry budgets are finite. Exhaustion means `BLOCKED_HUMAN`, not another
+  attempt.
+
+## Notes on this machine
+
+- `better-sqlite3` is pinned to `^13`, not the plan's `^11`: v11 has no Node 26
+  prebuild and its source build hangs here.
+- `pnpm-workspace.yaml` and `.npmrc` exist to stop pnpm's install-script gate
+  from failing `pnpm test`. Neither blocked package needs its script.
+- Codex worker profiles pin `sandbox_mode = "workspace-write"` rather than
+  inheriting the global `danger-full-access`.
+
+## Docs
+
+- `docs/implementation-plan.md` — revised task plan
+- `docs/lifecycle.md` — issue lifecycle and wave semantics
+- `docs/reference/orca-agent-context.json` — captured Orca CLI schema

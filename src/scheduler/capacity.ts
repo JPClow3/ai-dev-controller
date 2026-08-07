@@ -1,38 +1,108 @@
-import { NotImplementedError } from '../util/errors.js';
+import type { ConcurrencyConfig } from '../config/schema.js';
 
-/**
- * Concurrency enforcement. Limits come from config/global.yaml:
- *   active_issues 4 | workers_per_issue 3 | global_agents 7
- *   gpt_heavy_agents 2 | gpt_luna_workers 3 | ollama_workers 3
- *   agents_per_repository 5
- */
-export interface CapacitySnapshot {
-  activeIssues: number;
-  globalAgents: number;
-  perRepository: Record<string, number>;
-  perProviderClass: Record<string, number>;
+/** A live agent, as the capacity check sees it. */
+export interface RunningAgent {
+  issueId: string;
+  repositoryId: string;
+  aliasId: string;
+  provider: 'chatgpt' | 'ollama';
+  /** Terra and Sol are the heavy GPT tiers and have their own sub-limit. */
+  heavy: boolean;
+  luna: boolean;
+}
+
+export interface CapacityState {
+  activeIssues: string[];
+  agents: RunningAgent[];
+}
+
+export interface CapacityDecision {
+  allowed: boolean;
+  /** Populated when `allowed` is false. Names the first limit hit. */
+  limit?: string;
   remaining: {
     issues: number;
     agents: number;
     gptHeavy: number;
     lunaWorkers: number;
     ollamaWorkers: number;
+    repository: number;
+    issueWorkers: number;
   };
 }
 
-export function snapshot(): CapacitySnapshot {
-  throw new NotImplementedError('capacity.snapshot');
+export interface DispatchRequest {
+  issueId: string;
+  repositoryId: string;
+  provider: 'chatgpt' | 'ollama';
+  heavy: boolean;
+  luna: boolean;
+  /** True when this dispatch would also open a new issue slot. */
+  startsNewIssue: boolean;
+  /** Per-repository override from the registry, if any. */
+  repositoryMaxAgents?: number;
 }
 
-/** Would dispatching this worker breach any limit? */
-export function canDispatch(_workerId: string, _projectId: string): boolean {
-  throw new NotImplementedError('capacity.canDispatch');
+function remainingFor(state: CapacityState, config: ConcurrencyConfig, request: DispatchRequest) {
+  const agents = state.agents;
+  const repoCap = request.repositoryMaxAgents ?? config.agentsPerRepository;
+
+  return {
+    issues: config.activeIssues - state.activeIssues.length,
+    agents: config.globalAgents - agents.length,
+    gptHeavy: config.gptHeavyAgents - agents.filter((a) => a.heavy).length,
+    lunaWorkers: config.gptLunaWorkers - agents.filter((a) => a.luna).length,
+    ollamaWorkers: config.ollamaWorkers - agents.filter((a) => a.provider === 'ollama').length,
+    repository: repoCap - agents.filter((a) => a.repositoryId === request.repositoryId).length,
+    issueWorkers: config.workersPerIssue - agents.filter((a) => a.issueId === request.issueId).length,
+  };
 }
 
 /**
- * Throttle new starts when providers approach quota or the remediation backlog
- * grows. Finishing beats starting.
+ * Would dispatching this agent breach any limit?
+ *
+ * Every limit is checked, and the first breach is named — "no capacity" with
+ * no reason is useless when you are trying to work out why nothing is running.
  */
-export function shouldThrottleNewWork(): boolean {
-  throw new NotImplementedError('capacity.shouldThrottleNewWork');
+export function availableCapacity(
+  state: CapacityState,
+  config: ConcurrencyConfig,
+  request: DispatchRequest,
+): CapacityDecision {
+  const remaining = remainingFor(state, config, request);
+
+  const checks: Array<[boolean, string]> = [
+    [request.startsNewIssue && remaining.issues <= 0, 'active_issues'],
+    [remaining.agents <= 0, 'global_agents'],
+    [remaining.issueWorkers <= 0, 'workers_per_issue'],
+    [remaining.repository <= 0, 'agents_per_repository'],
+    [request.heavy && remaining.gptHeavy <= 0, 'gpt_heavy_agents'],
+    [request.luna && remaining.lunaWorkers <= 0, 'gpt_luna_workers'],
+    [request.provider === 'ollama' && remaining.ollamaWorkers <= 0, 'ollama_workers'],
+  ];
+
+  for (const [breached, limit] of checks) {
+    if (breached) return { allowed: false, limit, remaining };
+  }
+  return { allowed: true, remaining };
+}
+
+/**
+ * Finishing beats starting.
+ *
+ * Six new implementations running while three PRs sit at 95% is the failure
+ * mode this guards against.
+ */
+export function shouldThrottleNewWork(input: {
+  remediationBacklog: number;
+  remediationBacklogThreshold: number;
+  providerPressures: Array<'LOW' | 'NORMAL' | 'HIGH' | 'EXHAUSTED'>;
+}): { throttle: boolean; reason?: string } {
+  if (input.remediationBacklog >= input.remediationBacklogThreshold) {
+    return { throttle: true, reason: 'remediation backlog is growing; finish active work first' };
+  }
+  if (input.providerPressures.length > 0 && input.providerPressures.every((p) => p === 'EXHAUSTED')) {
+    return { throttle: true, reason: 'every provider is EXHAUSTED' };
+  }
+  return { throttle: false };
 }

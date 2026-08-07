@@ -1,37 +1,13 @@
-version: 1
-
-# Global controller policy. Repository-specific overrides live in
-# projects/registry.yaml; framework-specific validation lives in each
-# repository's .ai-workflow/project.yaml.
+poll_interval_seconds: 45
 
 concurrency:
   active_issues: 4
   workers_per_issue: 3
   global_agents: 7
-
-  gpt_heavy_agents: 2      # Terra / Sol
+  gpt_heavy_agents: 2
   gpt_luna_workers: 3
   ollama_workers: 3
-
   agents_per_repository: 5
-
-scheduler:
-  poll_interval_seconds: 45
-  # Lower number = higher priority. Finishing beats starting.
-  priorities:
-    P0_human_unblocked: 0
-    P1_final_review_pr: 1
-    P2_ci_remediation: 2
-    P3_integration: 3
-    P4_active_issue_worker: 4
-    P5_new_ready_issue: 5
-    P6_challenger_experiment: 6
-    P7_maintenance: 7
-
-  # Throttle new starts when these are true.
-  backpressure:
-    remediation_backlog_threshold: 4
-    provider_pressure_halt_at: EXHAUSTED
 
 linear:
   labels:
@@ -42,24 +18,24 @@ linear:
     blocked: ai-blocked
     reviewing: ai-reviewing
     pr_open: ai-pr-open
-  # The controller trusts only explicit blockedBy relations.
+  # Only explicit, human-approved blockedBy relations are trusted.
   trust_inferred_dependencies: false
 
 git:
-  branch_prefix: ai/
+  branch_prefix: "ai/"
   bootstrap_branch: ai/bootstrap-project-knowledge
-  # Always re-fetch and branch from the newest base before starting an issue.
   always_fresh_base: true
 
 github:
   draft_prs: true
-  auto_merge: false          # never. you are the merge authority.
+  auto_merge: false
   ci_is_authoritative: true
 
 knowledge:
-  # Soft gate: work may proceed while the bootstrap PR is still open.
+  # Soft gate: work proceeds while the bootstrap PR is open.
   allow_unverified_execution: true
-  bootstrap_scan_globs:
+  max_file_bytes: 262144
+  scan_globs:
     - "**/AGENTS.md"
     - "**/CLAUDE.md"
     - "**/GEMINI.md"
@@ -72,16 +48,21 @@ knowledge:
     - ".ai/**/*.md"
     - ".cursor/**/*.md"
     - "*.md"
-  bootstrap_exclude_globs:
+  exclude_globs:
     - "node_modules/**"
     - "vendor/**"
     - "dist/**"
     - "build/**"
     - "generated/**"
     - "docs/archive/**"
+    - ".git/**"
+
+orca:
+  bin: orca
+  child_worktrees: true
 
 safety:
-  # Hard stops. Workers may WRITE code that does these; they may never EXECUTE them.
+  # Workers may WRITE code that does these. They may never EXECUTE them.
   forbidden_operations:
     - production_database_mutation
     - production_deployment
@@ -91,11 +72,6 @@ safety:
     - pr_merge
     - branch_protection_change
     - destructive_cloud_operation
-
-orca:
-  bin: orca
-  json_output: true
-  child_worktrees: true
 
 paths:
   database: ./data/controller.db
