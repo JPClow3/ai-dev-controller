@@ -34,8 +34,14 @@ export function shortBranch(ref: string | undefined): string {
  * every time and a second worktree was created on every restart.
  */
 export function matchesRequestedBranch(worktree: OrcaWorktree, requested: string): boolean {
+  if (worktree.displayName === requested) return true;
+  // Orca replaces `/` with `-` inside the name as well as prepending the
+  // owner, so `ai/JP-9-work` comes back as `JPClow3/ai-JP-9-work`. Both
+  // transformations have to be undone before comparing.
+  const flat = (value: string) => value.replace(/\//g, '-');
   const actual = shortBranch(worktree.branch);
-  return actual === requested || actual.endsWith(`/${requested}`) || worktree.displayName === requested;
+  const tail = actual.slice(actual.indexOf('/') + 1);
+  return actual === requested || flat(tail) === flat(requested);
 }
 
 export interface DispatchDeps {

@@ -20,10 +20,12 @@ describe('Orca names branches, the controller does not', () => {
    * `orca worktree create --name ai/JP-9-work` produces
    * `refs/heads/JPClow3/ai/JP-9-work`. There is no flag to override it.
    */
-  const ORCA_BRANCH = 'refs/heads/JPClow3/ai/JP-9-work';
+  // Observed, not assumed: Orca namespaces under the owner AND flattens the
+  // separator, so `--name ai/JP-9-work` becomes this.
+  const ORCA_BRANCH = 'refs/heads/JPClow3/ai-JP-9-work';
 
   it('strips the ref prefix Orca reports', () => {
-    expect(shortBranch(ORCA_BRANCH)).toBe('JPClow3/ai/JP-9-work');
+    expect(shortBranch(ORCA_BRANCH)).toBe('JPClow3/ai-JP-9-work');
     expect(shortBranch(undefined)).toBe('');
   });
 
@@ -36,20 +38,23 @@ describe('Orca names branches, the controller does not', () => {
 
   it('still refuses to push a branch the controller did not create', () => {
     // The guard was relaxed to accept a namespaced prefix, not removed.
+    expect(hasControllerPrefix('JPClow3/ai-JP-9-work', 'ai/')).toBe(true);
     expect(hasControllerPrefix('JPClow3/ai/JP-9-work', 'ai/')).toBe(true);
     expect(hasControllerPrefix('ai/JP-9-work', 'ai/')).toBe(true);
     expect(hasControllerPrefix('JPClow3/hotfix', 'ai/')).toBe(false);
     expect(hasControllerPrefix('feature/ai-thing', 'ai/')).toBe(false);
+    expect(hasControllerPrefix('JPClow3/aircraft-fix', 'ai/')).toBe(false);
   });
 
   it('never pushes a base branch, however it is namespaced', () => {
     expect(() => assertControllerBranch('main', 'ai/', 'main')).toThrow(ForbiddenGitOperation);
     expect(() => assertControllerBranch('master', 'ai/', 'main')).toThrow(ForbiddenGitOperation);
-    expect(() => assertControllerBranch('JPClow3/ai/JP-9-work', 'ai/', 'main')).not.toThrow();
+    expect(() => assertControllerBranch('JPClow3/ai-JP-9-work', 'ai/', 'main')).not.toThrow();
   });
 
   it('resolves an issue id from a namespaced merged branch', () => {
     // Without this a merged PR released none of its blockers.
+    expect(issueIdFromBranch('JPClow3/ai-JP-8-work', 'ai/')).toBe('JP-8');
     expect(issueIdFromBranch('JPClow3/ai/JP-8-work', 'ai/')).toBe('JP-8');
     expect(issueIdFromBranch('ai/JP-8-work', 'ai/')).toBe('JP-8');
     expect(issueIdFromBranch('JPClow3/feature/JP-8', 'ai/')).toBeNull();
