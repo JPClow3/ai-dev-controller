@@ -174,13 +174,17 @@ export function worktreePathFromId(worktreeId: string): string {
   return path;
 }
 
-/** `ai/UNI-142-add-filtering` — the branch naming the design fixes. */
-export function branchNameFor(prefix: string, issueId: string, slug: string): string {
-  const clean = slug
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40)
-    .replace(/-+$/, '');
-  return `${prefix}${issueId}${clean ? `-${clean}` : ''}`;
+/**
+ * The one branch name an issue gets.
+ *
+ * A pure function of the issue id, with no slug. Two call sites used to
+ * append different suffixes for the same run — dispatch used the routing role
+ * (`ai/JP-8-routine-behavior`), provisioning used the literal `work`
+ * (`ai/JP-8-work`) — so when provisioning ran against a dispatched run it
+ * looked for a worktree that did not exist under that name and created a
+ * second one. An issue maps to one branch; the name must not depend on which
+ * code path asks for it.
+ */
+export function branchNameFor(prefix: string, issueId: string): string {
+  return `${prefix}${issueId}`;
 }
