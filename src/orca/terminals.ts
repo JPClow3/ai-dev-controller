@@ -138,8 +138,17 @@ export const WORKER_EXIT_FILE = 'exit.txt';
  *      Orca at all. The script records the exit status itself, which also
  *      survives a controller or Orca restart in a way terminal state does not.
  */
-export function workerScript(profile: string, controlDir: string): string {
+export function workerScript(profile: string, controlDir: string, setupCommand?: string): string {
   const q = (name: string) => `'${join(controlDir, name).replace(/'/g, "''")}'`;
+
+  // The repository's own preparation, run before the agent rather than by it.
+  // A fresh worktree has no dependencies, and the first live worker said so
+  // itself: "node_modules is absent, so the focused script cannot find Vitest
+  // (and installing dependencies would modify paths outside my ownership)".
+  // It was right on both counts — which is why the controller does it.
+  const setup = setupCommand
+    ? [`Write-Host "ai-dev worker: ${setupCommand}"`, setupCommand, '']
+    : [];
 
   const codex = [
     'codex exec',
@@ -152,6 +161,7 @@ export function workerScript(profile: string, controlDir: string): string {
 
   return [
     '$ErrorActionPreference = "Continue"',
+    ...setup,
     `Get-Content -Raw ${q(WORKER_PROMPT_FILE)} | ${codex}`,
     '$code = $LASTEXITCODE',
     'if ($null -eq $code) { $code = 0 }',
