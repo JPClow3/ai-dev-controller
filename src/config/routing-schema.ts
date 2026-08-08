@@ -11,6 +11,12 @@ const aliasSchema = z
     harness: z.string(),
     provider: z.enum(['chatgpt', 'ollama']),
     profile: z.string(),
+    /**
+     * Underlying model tag, for providers called over HTTP rather than through
+     * the Codex harness. The Codex profile name does not carry it, and
+     * hardcoding a lookup table means every new model needs a code change.
+     */
+    model: z.string().optional(),
     context_window: z.number().int().positive().optional(),
     usage_class: z.enum(['low', 'medium', 'high']).optional(),
   })
@@ -19,6 +25,7 @@ const aliasSchema = z
     harness: a.harness,
     provider: a.provider,
     profile: a.profile,
+    model: a.model,
     contextWindow: a.context_window,
     usageClass: a.usage_class,
   }));

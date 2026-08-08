@@ -58,6 +58,19 @@ aliases:
     provider: chatgpt
     profile: gpt-sol-xhigh
 
+  # Local smoke-test worker. Not referenced by any role, so it never gets
+  # routed real work - it exists so the invocation path (HTTP transport, JSON
+  # extraction, schema validation, retry) can be exercised without a paid
+  # Ollama Cloud subscription or Codex quota.
+  local_smoke:
+    family: glm
+    harness: ollama-http
+    provider: ollama
+    profile: ollama-local
+    model: qwen2.5-coder:7b
+    context_window: 32768
+    usage_class: low
+
 # Starting hypothesis, not permanent truth. Promotion rules in scoring.yaml
 # rewrite the per-repository champion as evidence accumulates.
 roles:

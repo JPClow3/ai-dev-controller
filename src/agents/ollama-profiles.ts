@@ -91,10 +91,12 @@ const MODEL_BY_ALIAS: Readonly<Record<string, string>> = {
 };
 
 export function modelName(alias: ModelAlias): string {
-  const model = MODEL_BY_ALIAS[alias.profile];
+  // An explicitly declared tag always wins; the table is only a fallback for
+  // the three cloud aliases that predate the `model` field.
+  const model = alias.model ?? MODEL_BY_ALIAS[alias.profile];
   if (!model) {
     throw new Error(
-      `No Ollama model tag known for profile "${alias.profile}". Add it to MODEL_BY_ALIAS.`,
+      `No Ollama model tag for alias profile "${alias.profile}". Add a \`model:\` field in config/routing.yaml.`,
     );
   }
   return model;

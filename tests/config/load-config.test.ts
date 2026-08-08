@@ -143,12 +143,29 @@ human_escalation_triggers: [unresolved_requirement]
     expect(() => loadControllerConfig(dir)).toThrow(/must route to "human"/);
   });
 
-  it('every routing alias maps to a Codex profile', () => {
+  it('every routing alias declares a profile', () => {
     const { aliases } = loadControllerConfig(ROOT).routing;
     expect(Object.keys(aliases).length).toBeGreaterThan(0);
     for (const [name, alias] of Object.entries(aliases)) {
-      expect(alias.profile, `${name} must declare a Codex profile`).toBeTruthy();
-      expect(alias.harness).toBe('codex');
+      expect(alias.profile, `${name} must declare a profile`).toBeTruthy();
     }
+  });
+
+  it('every alias a role can actually route to runs through the Codex harness', () => {
+    // Comparing models across two different agent harnesses would confound the
+    // routing statistics, so real work goes through one interface.
+    const { aliases, roles } = loadControllerConfig(ROOT).routing;
+    const routable = new Set(
+      Object.values(roles).flatMap((r) => [r.champion, ...r.challengers]),
+    );
+    for (const name of routable) {
+      expect(aliases[name]!.harness, `${name} is routable and must use codex`).toBe('codex');
+    }
+  });
+
+  it('an ollama alias declares the model tag its transport needs', () => {
+    const { aliases } = loadControllerConfig(ROOT).routing;
+    const local = aliases['local_smoke'];
+    if (local) expect(local.model).toBeTruthy();
   });
 });

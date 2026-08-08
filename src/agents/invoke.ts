@@ -26,6 +26,10 @@ function validator(rootDir: string, schema: string) {
   return fn;
 }
 
+function readSchema(rootDir: string, schema: string): string {
+  return readFileSync(resolve(rootDir, 'schemas', `${schema}.schema.json`), 'utf8');
+}
+
 /**
  * Models wrap JSON in prose or fences despite instructions. Recovering here is
  * cheaper than burning a retry, but a response that needs recovery is still
@@ -74,7 +78,23 @@ export function createInvoker(options: InvokerOptions) {
     }
 
     const validate = validator(options.rootDir, request.schema);
-    const system = readPrompt(request.prompt);
+
+    // The prompts describe the *content* in prose; the schema describes the
+    // *shape*. Sending only the prose leaves the model guessing at the JSON
+    // layout - it reliably emits the documented section headings as top-level
+    // keys, which `additionalProperties: false` then rejects.
+    const system = [
+      readPrompt(request.prompt),
+      '',
+      '---',
+      '',
+      'Your reply must be a single JSON object valid against this JSON Schema.',
+      'Emit no properties the schema does not define.',
+      '',
+      '```json',
+      readSchema(options.rootDir, request.schema),
+      '```',
+    ].join('\n');
     const timeoutMs = request.timeoutMs ?? 120_000;
     const maxAttempts = request.maxAttempts ?? 2;
 
