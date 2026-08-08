@@ -40,6 +40,11 @@ export function codexTransport(bin = process.env['CODEX_BIN'] ?? 'codex'): Struc
         alias.profile,
         '--sandbox',
         'read-only',
+        // Same reason as the worker launcher: the "elevated" Windows sandbox
+        // raises a UAC prompt that an unattended run cannot answer. Read-only
+        // calls have survived it so far, which is luck, not design.
+        '-c',
+        'windows.sandbox="unelevated"',
         '--skip-git-repo-check',
         '--output-last-message',
         messagePath,

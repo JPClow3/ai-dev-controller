@@ -171,6 +171,17 @@ export function workerScript(profile: string, controlDir: string, options: Worke
     'codex exec',
     `--profile ${profile}`,
     '--sandbox workspace-write',
+    // `windows.sandbox` defaults to whatever the user's top-level config says,
+    // and "elevated" launches a helper through ShellExecuteExW that raises a
+    // UAC prompt. Unattended, nobody answers it:
+    //
+    //   windows sandbox failed: orchestrator_helper_launch_canceled:
+    //   ShellExecuteExW failed to launch setup helper: 1223   (ERROR_CANCELLED)
+    //
+    // The worker could not read or write a single file. "unelevated" is the
+    // only other accepted value and needs no prompt; a disposable worktree
+    // does not need administrator rights either way.
+    `-c 'windows.sandbox="unelevated"'`,
     '--skip-git-repo-check',
     `--output-last-message ${q(WORKER_RESULT_FILE)}`,
     '-',

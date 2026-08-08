@@ -207,6 +207,15 @@ describe('worker launch needs no GUI-registered agent', () => {
     expect(workerScript('x', CONTROL, { setupCommand: 'npm ci' })).not.toContain('--add-dir');
   });
 
+  /**
+   * The elevated Windows sandbox launches its helper through ShellExecuteExW,
+   * which raises a UAC prompt. Unattended it comes back ERROR_CANCELLED
+   * (1223) and the worker cannot read or write a single file.
+   */
+  it('never asks for a UAC prompt nobody can answer', () => {
+    expect(workerScript('x', CONTROL)).toContain('windows.sandbox="unelevated"');
+  });
+
   it('treats a missing sentinel as still running, never as success', () => {
     expect(readWorkerExit(null)).toBeNull();
     expect(readWorkerExit('0')).toBe(0);
