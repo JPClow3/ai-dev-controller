@@ -150,18 +150,10 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     mkdirSync(controlDir, { recursive: true });
     writeFileSync(join(controlDir, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
     const setup = readSetupCommand(treePath(ctx));
-    // Resolved, not constructed: a linked worktree's git dir is wherever the
-    // `.git` file points, and the worker cannot commit without write access
-    // to it.
-    const gitCommonDir = await wiring
-      .gitRunner(worktree.path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
-      .catch(() => '');
-
     writeFileSync(
       join(controlDir, WORKER_SCRIPT_FILE),
       workerScript(profile, controlDir, {
         ...(setup?.command ? { setupCommand: setup.command } : {}),
-        ...(gitCommonDir ? { gitCommonDir } : {}),
       }),
       'utf8',
     );
@@ -202,6 +194,75 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       ].join('\n');
     } catch {
       return '(file tree unavailable)';
+    }
+  }
+
+  /**
+   * Commits whatever a finished worker left uncommitted, within its own paths.
+   *
+   * Workers cannot commit for themselves: a linked worktree's git directory is
+   * outside the sandbox's writable root, and granting it pushes codex onto a
+   * Windows elevation helper that cannot run unattended. So the controller
+   * does it — which turns out to be the better arrangement anyway. Staging by
+   * pathspec makes the ownership rule mechanical: a change outside the
+   * declared set cannot be committed, however convinced the model is that it
+   * belonged. Files left dirty afterwards are reported as the scope violation
+   * they are, rather than silently swept into the pull request.
+   */
+  async function commitWorkerChanges(
+    ctx: StepContext,
+    task: { id: string; summary: string; owns: string[] },
+    workerPath: string,
+    controlDir: string,
+  ): Promise<void> {
+    const run = (args: string[]) => wiring.gitRunner(workerPath, args);
+
+    const dirty = await run(['status', '--porcelain']).catch(() => '');
+    if (!dirty.trim()) return;
+
+    // Pathspecs, not a hand-rolled glob matcher: git already knows how to
+    // match `packages/shared/**` against a path, and getting that subtly
+    // wrong would either drop the work or widen the scope.
+    if (task.owns.length === 0) {
+      log.warn(`${ctx.run.issueId}/${task.id}: uncommitted changes but no declared ownership; leaving them`);
+      return;
+    }
+    await run(['add', '--', ...task.owns]).catch((err: unknown) => {
+      log.warn(`${ctx.run.issueId}/${task.id}: could not stage owned paths`, (err as Error).message);
+    });
+
+    const staged = await run(['diff', '--cached', '--name-only']).catch(() => '');
+    if (!staged.trim()) {
+      log.warn(`${ctx.run.issueId}/${task.id}: changes exist but none inside ${task.owns.join(', ')}`);
+      return;
+    }
+
+    // The worker's own account of what it did, so the commit says something
+    // truer than a template would.
+    const summary = readIfPresent(controlDir, WORKER_RESULT_FILE).split('\n')[0]?.trim() ?? '';
+    const message = [
+      `${ctx.run.issueId}: ${task.summary}`,
+      '',
+      summary || `Task ${task.id}.`,
+      '',
+      `Task: ${task.id}`,
+      `Owned paths: ${task.owns.join(', ')}`,
+    ].join('\n');
+
+    await run(['commit', '-m', message]);
+    log.info(`${ctx.run.issueId}/${task.id}: committed ${staged.split('\n').filter(Boolean).length} owned file(s)`);
+
+    const leftover = await run(['status', '--porcelain']).catch(() => '');
+    const outside = leftover
+      .split('\n')
+      .map((line) => line.slice(3).trim())
+      .filter(Boolean);
+    if (outside.length > 0) {
+      log.warn(
+        `${ctx.run.issueId}/${task.id}: left ${outside.length} change(s) outside its ownership, not committed: ${outside
+          .slice(0, 5)
+          .join(', ')}`,
+      );
     }
   }
 
@@ -364,10 +425,13 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
           continue;
         }
 
-        // Harvest before the task is marked done: the commits recorded here
-        // are the only thing integration has to work with, and nothing was
-        // writing them, so every run reached INTEGRATING and reported "no
-        // worker produced any commit".
+        // Commit, then harvest. The commits recorded here are the only thing
+        // integration has to work with, and nothing was writing them, so every
+        // run reached INTEGRATING and reported "no worker produced any
+        // commit".
+        await commitWorkerChanges(ctx, task, path, control).catch((err: unknown) => {
+          log.error(`${ctx.run.issueId}/${task.id}: could not commit`, (err as Error).message);
+        });
         const commits = await harvestCommits(ctx, task.id, path, control);
         repos.setTaskState(ctx.run.id, task.id, 'DONE');
         log.info(`${ctx.run.issueId}/${task.id}: finished with ${commits.length} commit(s)`);
@@ -550,16 +614,16 @@ function workerPrompt(ctx: StepContext, task: PlanTask): string {
     '',
     '## Finishing',
     "This worktree's dependencies were installed for you before you started,",
-    'so you can and should run the relevant tests before committing.',
+    'so you can and should run the relevant tests before you finish.',
     '',
-    'Commit your work on the branch this worktree already has checked out:',
+    'Leave your changes in the working tree. Do not commit, branch, merge or',
+    'push — the controller commits the files you own, on the branch this',
+    'worktree already has checked out, once you exit. Anything you change',
+    'outside the paths above will NOT be committed and will be reported as a',
+    'scope violation, so keep your edits inside them.',
     '',
-    '    git add <the files you own>',
-    '    git commit -m "<what you changed>"',
-    '',
-    'A commit is how your work reaches the pull request. Integration cherry-picks',
-    'your commits into the issue branch, so an uncommitted change is a change that',
-    'never happened. Do not create a branch, do not merge, and do not push.',
+    'Your last message becomes the commit description. Make it an accurate',
+    'account of what you actually changed and what you verified.',
     '',
     `Base branch: ${ctx.baseBranch}. Never merge, never push to the base branch.`,
   ].join('\n');
