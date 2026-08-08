@@ -113,7 +113,7 @@ export async function dispatchNewIssue(
 
   const repoPath = project.repository.path;
   const baseBranch = project.repository.baseBranch;
-  const branch = branchNameFor(deps.config.global.git.branchPrefix, input.issueId, input.role);
+  const branch = branchNameFor(deps.config.global.git.branchPrefix, input.issueId);
 
   // 1. Refuse duplicates before touching anything.
   const existing = await findExistingWorkspace(deps, input.issueId, branch, input.slug, repoPath);

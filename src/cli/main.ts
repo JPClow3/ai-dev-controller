@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadControllerConfig } from '../config/load-config.js';
 import { openDatabase } from '../state/db.js';
+import { acquireControllerLock } from '../state/lock.js';
 import { createRepositories } from '../state/repositories.js';
 import { defaultPressure, pressureFromOrca, withOverride } from '../routing/pressure.js';
 import { createOrcaClient, status as orcaStatus } from '../orca/client.js';
@@ -398,6 +399,19 @@ program
   .option('--dry-run', 'never write to Linear')
   .action(async (opts: { once?: boolean; dryRun?: boolean }) => {
     const config = loadControllerConfig(ROOT);
+
+    // Only the loop takes the lock. The read-only commands must stay usable
+    // while it runs — inspecting a live controller is the main reason they
+    // exist.
+    let release: () => void;
+    try {
+      release = acquireControllerLock(config.global.paths.database);
+    } catch (err) {
+      console.error(pc.red((err as Error).message));
+      process.exitCode = 1;
+      return;
+    }
+
     const db = openDatabase(config.global.paths.database);
     try {
       const repos = createRepositories(db);
@@ -414,6 +428,7 @@ program
       }
     } finally {
       db.close();
+      release();
     }
   });
 

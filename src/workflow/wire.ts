@@ -13,7 +13,13 @@ import { setAiLifecycleLabel } from '../linear/labels.js';
 import { postBlockerQuestion } from '../linear/dependencies.js';
 import { listRecentlyMerged, issueIdFromBranch } from '../github/pull-requests.js';
 import { createSteps } from './steps.js';
-import { createDispatcher, defaultAgentNameFor, type DispatchDeps } from './dispatch.js';
+import {
+  createDispatcher,
+  defaultAgentNameFor,
+  matchesRequestedBranch,
+  shortBranch,
+  type DispatchDeps,
+} from './dispatch.js';
 import {
   createParentWorktree,
   listRepos,
@@ -30,11 +36,6 @@ import { projectToLinear } from './states.js';
 import { logger } from '../util/log.js';
 
 const log = logger('wire');
-
-/** Orca reports branches fully qualified; git commands want the short name. */
-function stripRef(ref: string | undefined): string {
-  return (ref ?? '').replace(/^refs\/heads\//, '');
-}
 
 export interface WiringOptions {
   config: ControllerConfig;
@@ -167,7 +168,7 @@ export function buildController(options: WiringOptions) {
     const project = config.registry.projects[run.repositoryId];
     if (!project) return false;
 
-    const requested = branchNameFor(config.global.git.branchPrefix, run.issueId, 'work');
+    const requested = branchNameFor(config.global.git.branchPrefix, run.issueId);
     const baseSha = await git.fetchFreshBase(project.repository.path, project.repository.baseBranch);
 
     const orcaRepos = await listRepos(orca);
@@ -178,8 +179,10 @@ export function buildController(options: WiringOptions) {
     }
 
     // Adopt an existing worktree rather than creating a second one.
-    const existing = (await listWorktrees(orca).catch(() => [])).find(
-      (w) => stripRef(w.branch) === requested || w.displayName === requested || stripRef(w.branch).endsWith(`/${requested}`),
+    // The same matcher dispatch uses, so a run provisioned here adopts the
+    // worktree dispatch created rather than making a second one.
+    const existing = (await listWorktrees(orca).catch(() => [])).find((w) =>
+      matchesRequestedBranch(w, requested),
     );
     const worktree =
       existing ??
@@ -193,7 +196,7 @@ export function buildController(options: WiringOptions) {
     // Orca owns branch naming: `--name ai/JP-9-work` becomes
     // `JPClow3/ai/JP-9-work`. Recording the requested name instead of the real
     // one produced a push of a ref that does not exist locally.
-    const branch = stripRef(worktree.branch) || requested;
+    const branch = shortBranch(worktree.branch) || requested;
     repos.attachRunWorkspace(runId, { branch, baseSha, orcaWorktreeId: worktree.id });
     log.info(`${run.issueId}: workspace ${branch} at ${baseSha.slice(0, 8)}`);
     return true;

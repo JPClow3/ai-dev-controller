@@ -60,7 +60,12 @@ function deps(over: Partial<DispatchDeps> = {}): DispatchDeps {
         stdout: JSON.stringify({
           id: 'x',
           ok: true,
-          result: { worktrees: [{ id: 'existing-wt', path: 'C:/wt', branch: 'ai/JP-7-work' }] },
+          // The shape Orca really returns: owner-namespaced and flattened.
+          result: {
+            worktrees: [
+              { id: 'existing-wt', path: 'C:/wt', branch: 'refs/heads/JPClow3/ai-JP-7' },
+            ],
+          },
         }),
         stderr: '',
       };
@@ -123,7 +128,9 @@ describe('adopting existing work still claims and records it', () => {
 
     const run = repos.getActiveRun('JP-7')!;
     expect(run.orcaWorktreeId).toBe('existing-wt');
-    expect(run.branch).toBe('ai/JP-7-work');
+    // The branch Orca actually created, not the one that was requested:
+    // pushing the requested name pushed a ref that does not exist locally.
+    expect(run.branch).toBe('JPClow3/ai-JP-7');
     expect(run.baseSha).toBe('deadbeefcafe');
   });
 

@@ -180,15 +180,17 @@ describe('repo resolution and branch naming', () => {
   });
 
   it('builds the ai/ branch name the design fixes', () => {
-    expect(branchNameFor('ai/', 'UNI-142', 'Add filtering to risk map')).toBe(
-      'ai/UNI-142-add-filtering-to-risk-map',
-    );
+    expect(branchNameFor('ai/', 'UNI-142')).toBe('ai/UNI-142');
   });
 
-  it('keeps branch names git-safe and bounded', () => {
-    const name = branchNameFor('ai/', 'UNI-1', 'Fix!! the *thing* — now?? '.repeat(5));
-    expect(name).toMatch(/^ai\/UNI-1-[a-z0-9-]+$/);
-    expect(name.endsWith('-')).toBe(false);
+  /**
+   * Regression: dispatch appended the routing role and provisioning appended
+   * the literal `work`, so the same run asked for `ai/JP-8-routine-behavior`
+   * down one path and `ai/JP-8-work` down the other — and got two worktrees.
+   */
+  it('depends on nothing but the issue, so every path asks for one branch', () => {
+    expect(branchNameFor('ai/', 'UNI-1')).toBe(branchNameFor('ai/', 'UNI-1'));
+    expect(branchNameFor('ai/', 'UNI-1')).toMatch(/^ai\/UNI-1$/);
   });
 });
 
