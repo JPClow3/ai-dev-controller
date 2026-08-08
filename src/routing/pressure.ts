@@ -44,12 +44,34 @@ export function scarcityMultiplier(routing: RoutingConfig, pressure: Pressure): 
  * Orca already reports real rate-limit windows, so no browser scraping is
  * needed — which the design explicitly wanted to avoid.
  */
-export interface OrcaRateLimits {
-  codex?: { weekly?: { usedPercent?: number } | null; session?: { usedPercent?: number } | null };
+export interface OrcaRateLimitWindow {
+  usedPercent?: number;
+  /** Epoch milliseconds. A reading past its own reset describes a spent window. */
+  resetsAt?: number | null;
 }
 
-export function pressureFromOrca(rateLimits: OrcaRateLimits): Partial<PressureMap> {
-  const used = rateLimits.codex?.weekly?.usedPercent ?? rateLimits.codex?.session?.usedPercent;
+export interface OrcaRateLimits {
+  codex?: {
+    weekly?: OrcaRateLimitWindow | null;
+    session?: OrcaRateLimitWindow | null;
+  };
+}
+
+/**
+ * Orca caches its last reading, so a window can be reported at 100% long after
+ * it reset. Taking that at face value declared the only usable provider
+ * EXHAUSTED and throttled the whole controller against a quota that had
+ * already refilled — an expired reading carries no information, so it is
+ * dropped rather than believed.
+ */
+export function pressureFromOrca(rateLimits: OrcaRateLimits, now = Date.now()): Partial<PressureMap> {
+  const fresh = (window: OrcaRateLimitWindow | null | undefined): number | undefined => {
+    if (!window || window.usedPercent === undefined) return undefined;
+    if (window.resetsAt != null && window.resetsAt <= now) return undefined;
+    return window.usedPercent;
+  };
+
+  const used = fresh(rateLimits.codex?.weekly) ?? fresh(rateLimits.codex?.session);
   if (used === undefined) return {};
 
   const pressure: Pressure =

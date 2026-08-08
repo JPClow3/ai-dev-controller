@@ -41,6 +41,7 @@ function deps(over: Partial<OrchestratorDeps> = {}): OrchestratorDeps {
     })),
     createWorktrees: vi.fn(async () => undefined),
     workersSettled: vi.fn(async () => ({ allSettled: true, interrupted: [] })),
+    dispatchNextWave: vi.fn(async () => 0),
     integrate: vi.fn(async () => ({ conflicts: [], headSha: 'abc1234567' })),
     runValidation: vi.fn(async () => ({
       passed: true,
@@ -89,6 +90,7 @@ function ctx(state: WorkflowState, ciTrigger: CiTrigger = 'pull_request'): StepC
     risk: 'low',
     baseBranch: 'main',
     branch: 'ai/UNI-1-test',
+    worktreePath: 'C:/wt/ai-UNI-1-test',
   };
 }
 

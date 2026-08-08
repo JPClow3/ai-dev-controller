@@ -31,6 +31,14 @@ export interface StepContext {
   risk: Risk;
   baseBranch: string;
   branch: string;
+  /**
+   * The parent Orca worktree, where this run's branch is actually checked out.
+   *
+   * Distinct from the registry's repository path, which holds the base branch.
+   * Every git and validation operation after PLANNING belongs here; running
+   * them in the registry path operates on the wrong tree entirely.
+   */
+  worktreePath: string;
 }
 
 /**
@@ -51,6 +59,8 @@ export interface OrchestratorDeps {
   createWorktrees: (ctx: StepContext, tasks: PlanTask[]) => Promise<void>;
 
   workersSettled: (ctx: StepContext) => Promise<{ allSettled: boolean; interrupted: string[] }>;
+  /** Launches tasks whose blockers have finished; returns how many started. */
+  dispatchNextWave: (ctx: StepContext) => Promise<number>;
   integrate: (ctx: StepContext) => Promise<{ conflicts: string[]; headSha: string | null }>;
 
   runValidation: (ctx: StepContext) => Promise<ValidationSummary>;
@@ -193,6 +203,15 @@ async function stepImplementing(ctx: StepContext, deps: OrchestratorDeps): Promi
       reason: `interrupted worker(s): ${interrupted.join(', ')}`,
     });
   }
+
+  // A wave finishing is not the plan finishing. Tasks held back behind a
+  // blocker become runnable exactly here, and integrating without them would
+  // ship half a plan while reporting that every task reached a terminal state.
+  const started = await deps.dispatchNextWave(ctx);
+  if (started > 0) {
+    return { from: ctx.run.state, to: null, action: 'waiting', detail: `${started} task(s) dispatched in the next wave` };
+  }
+
   return move(ctx, deps, 'INTEGRATING', {
     reason: 'all workers reached a terminal state',
     mechanicalFacts: { allTasksTerminal: true },

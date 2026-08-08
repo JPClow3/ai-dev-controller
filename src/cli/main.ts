@@ -2,10 +2,13 @@
 import 'dotenv/config';
 import { Command } from 'commander';
 import pc from 'picocolors';
+import { execa } from 'execa';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadControllerConfig } from '../config/load-config.js';
 import { openDatabase } from '../state/db.js';
 import { createRepositories } from '../state/repositories.js';
-import { defaultPressure, pressureFromOrca } from '../routing/pressure.js';
+import { defaultPressure, pressureFromOrca, withOverride } from '../routing/pressure.js';
 import { createOrcaClient, status as orcaStatus } from '../orca/client.js';
 import { planBootstrap } from '../knowledge/bootstrap.js';
 import { openBootstrapPullRequest } from '../knowledge/bootstrap-pr.js';
@@ -23,6 +26,59 @@ const program = new Command();
 program.name('ai-dev').description('Local AI development controller').version('0.1.0');
 
 const ROOT = process.cwd();
+
+/**
+ * Whether the Codex profiles the routing table names can actually run.
+ *
+ * Checks one profile with a trivial prompt rather than trusting
+ * `codex login status`: the CLI reports a live ChatGPT session from a cached
+ * token whose refresh has been revoked server-side, so the only honest test is
+ * a real call.
+ */
+async function codexChecks(
+  config: ReturnType<typeof loadControllerConfig>,
+): Promise<Array<[string, boolean, string]>> {
+  const bin = process.env['CODEX_BIN'] ?? 'codex';
+  const profiles = new Set(
+    Object.values(config.routing.aliases)
+      .filter((a) => a.provider === 'chatgpt')
+      .map((a) => a.profile),
+  );
+  if (profiles.size === 0) return [];
+
+  const home = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
+  const missing = [...profiles].filter((p) => !existsSync(join(home, '.codex', `${p}.config.toml`)));
+  const results: Array<[string, boolean, string]> = [
+    [
+      'codex profiles',
+      missing.length === 0,
+      missing.length === 0 ? `${profiles.size} present` : `missing: ${missing.join(', ')}`,
+    ],
+  ];
+
+  const probe = [...profiles][0]!;
+  try {
+    const { exitCode, stderr, stdout } = await execa(
+      bin,
+      ['exec', '--profile', probe, '--sandbox', 'read-only', '--skip-git-repo-check', '-'],
+      { input: 'Reply with the single word OK.', timeout: 120_000, reject: false },
+    );
+    const output = `${stderr}\n${stdout}`;
+    const revoked = /refresh_token_invalidated|session has ended|log ?in again|401/i.test(output);
+    results.push([
+      'codex auth',
+      exitCode === 0 && !revoked,
+      revoked
+        ? 'ChatGPT session revoked — run `codex login`'
+        : exitCode === 0
+          ? `${probe} answered`
+          : output.trim().split('\n').slice(-1)[0]?.slice(0, 70) ?? `exit ${String(exitCode)}`,
+    ]);
+  } catch (err) {
+    results.push(['codex auth', false, (err as Error).message.slice(0, 70)]);
+  }
+  return results;
+}
 
 function withDb<T>(fn: (deps: { config: ReturnType<typeof loadControllerConfig>; repos: ReturnType<typeof createRepositories>; close: () => void }) => T): T {
   const config = loadControllerConfig(ROOT);
@@ -126,6 +182,12 @@ program
       pressure = { ...pressure, ...(pressureFromOrca(accounts.rateLimits ?? {}) as typeof pressure) };
     } catch {
       console.log(pc.dim('(could not read live quota from Orca; showing defaults)\n'));
+    }
+
+    // The same operator override the scheduler applies. Without it this
+    // command reported a routing table the controller would never use.
+    for (const provider of (process.env['AI_DEV_DISABLED_PROVIDERS'] ?? '').split(',').map((p) => p.trim()).filter(Boolean)) {
+      pressure = withOverride(pressure, provider, 'EXHAUSTED');
     }
 
     console.log(pc.bold('provider pressure'));
@@ -316,6 +378,12 @@ program
     } catch (err) {
       checks.push(['orca', false, (err as Error).message.slice(0, 80)]);
     }
+
+    // Reaches the provider, not just the binary. A revoked ChatGPT session
+    // leaves `codex login status` cheerfully reporting "Logged in using
+    // ChatGPT" while every actual call 401s — which cost a whole pilot run to
+    // discover from the inside.
+    for (const [name, ok, detail] of await codexChecks(config)) checks.push([name, ok, detail]);
 
     for (const [name, ok, detail] of checks) {
       console.log(`${ok ? pc.green('ok  ') : pc.red('FAIL')} ${name.padEnd(18)} ${pc.dim(detail)}`);

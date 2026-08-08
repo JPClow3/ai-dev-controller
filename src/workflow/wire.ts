@@ -14,7 +14,14 @@ import { postBlockerQuestion } from '../linear/dependencies.js';
 import { listRecentlyMerged, issueIdFromBranch } from '../github/pull-requests.js';
 import { createSteps } from './steps.js';
 import { createDispatcher, defaultAgentNameFor, type DispatchDeps } from './dispatch.js';
-import { createParentWorktree, listRepos, listWorktrees, findRepoBySlug, branchNameFor } from '../orca/worktrees.js';
+import {
+  createParentWorktree,
+  listRepos,
+  listWorktrees,
+  findRepoBySlug,
+  branchNameFor,
+  worktreePathFromId,
+} from '../orca/worktrees.js';
 import { advanceRun, type OrchestratorDeps, type StepContext } from './orchestrator.js';
 import type { RunnerDeps } from './runner.js';
 import type { WorkItem } from '../scheduler/priority.js';
@@ -23,6 +30,11 @@ import { projectToLinear } from './states.js';
 import { logger } from '../util/log.js';
 
 const log = logger('wire');
+
+/** Orca reports branches fully qualified; git commands want the short name. */
+function stripRef(ref: string | undefined): string {
+  return (ref ?? '').replace(/^refs\/heads\//, '');
+}
 
 export interface WiringOptions {
   config: ControllerConfig;
@@ -128,6 +140,9 @@ export function buildController(options: WiringOptions) {
       log.warn(`${run.issueId}: run references unregistered project ${run.repositoryId}`);
       return null;
     }
+    // Before the worktree exists there is nothing to operate on, and the
+    // registry path is not an acceptable stand-in: it has the base branch
+    // checked out. `advanceAll` provisions first and rebuilds the context.
     return {
       run,
       projectId: run.repositoryId,
@@ -135,6 +150,7 @@ export function buildController(options: WiringOptions) {
       risk: 'low',
       baseBranch: project.repository.baseBranch,
       branch: run.branch ?? '',
+      worktreePath: run.orcaWorktreeId ? worktreePathFromId(run.orcaWorktreeId) : '',
     };
   }
 
@@ -151,7 +167,7 @@ export function buildController(options: WiringOptions) {
     const project = config.registry.projects[run.repositoryId];
     if (!project) return false;
 
-    const branch = branchNameFor(config.global.git.branchPrefix, run.issueId, 'work');
+    const requested = branchNameFor(config.global.git.branchPrefix, run.issueId, 'work');
     const baseSha = await git.fetchFreshBase(project.repository.path, project.repository.baseBranch);
 
     const orcaRepos = await listRepos(orca);
@@ -163,17 +179,21 @@ export function buildController(options: WiringOptions) {
 
     // Adopt an existing worktree rather than creating a second one.
     const existing = (await listWorktrees(orca).catch(() => [])).find(
-      (w) => w.branch === branch || w.displayName === branch,
+      (w) => stripRef(w.branch) === requested || w.displayName === requested || stripRef(w.branch).endsWith(`/${requested}`),
     );
     const worktree =
       existing ??
       (await createParentWorktree(orca, {
         repoSelector: `id:${repo.id}`,
-        name: branch,
+        name: requested,
         baseBranch: project.repository.baseBranch,
         linearIssue: run.issueId,
       }));
 
+    // Orca owns branch naming: `--name ai/JP-9-work` becomes
+    // `JPClow3/ai/JP-9-work`. Recording the requested name instead of the real
+    // one produced a push of a ref that does not exist locally.
+    const branch = stripRef(worktree.branch) || requested;
     repos.attachRunWorkspace(runId, { branch, baseSha, orcaWorktreeId: worktree.id });
     log.info(`${run.issueId}: workspace ${branch} at ${baseSha.slice(0, 8)}`);
     return true;
@@ -196,7 +216,7 @@ export function buildController(options: WiringOptions) {
       // once Linear says ai-running it never comes back through the ready
       // wave, so nothing would ever repair it. Provision here instead of
       // stranding the claim.
-      if (!ctx.branch) {
+      if (!ctx.branch || !ctx.worktreePath) {
         log.info(`${run.issueId}: claimed without a workspace; provisioning`);
         const provisioned = await provisionWorkspace(run.id).catch((err: unknown) => {
           log.error(`${run.issueId}: could not provision workspace`, (err as Error).message);
@@ -204,7 +224,7 @@ export function buildController(options: WiringOptions) {
         });
         if (!provisioned) continue;
         ctx = contextFor(run.id);
-        if (!ctx?.branch) continue;
+        if (!ctx?.branch || !ctx.worktreePath) continue;
       }
       try {
         const result = await advanceRun(ctx, steps);

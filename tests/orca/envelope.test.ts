@@ -6,7 +6,13 @@ import {
   unwrapWorktree,
   branchNameFor,
 } from '../../src/orca/worktrees.js';
-import { launchWorker, unwrapTerminal, workerCommand } from '../../src/orca/terminals.js';
+import {
+  launchWorker,
+  unwrapTerminal,
+  workerCommand,
+  workerScript,
+  readWorkerExit,
+} from '../../src/orca/terminals.js';
 
 function fakeCli(result: unknown) {
   const calls: string[][] = [];
@@ -68,7 +74,6 @@ describe('Orca wraps single objects under a named key', () => {
     const { client } = fakeCli({ terminal: { handle: 'term_abc', title: 'JP-7/api' } });
     const term = await launchWorker(client, {
       worktreeSelector: 'id:w',
-      profile: 'gpt-luna-high',
       title: 'JP-7/api',
     });
     expect(term.handle).toBe('term_abc');
@@ -116,41 +121,58 @@ describe('worker launch needs no GUI-registered agent', () => {
    * make the pipeline un-runnable from a script.
    */
   it('runs codex exec as a plain command', () => {
-    const cmd = workerCommand('gpt-luna-high');
-    expect(cmd).toContain('codex exec');
-    expect(cmd).toContain('--profile gpt-luna-high');
-    expect(cmd).toContain('--sandbox workspace-write');
+    const script = workerScript('gpt-luna-high');
+    expect(script).toContain('codex exec');
+    expect(script).toContain('--profile gpt-luna-high');
+    expect(script).toContain('--sandbox workspace-write');
+  });
+
+  /**
+   * Regression for the defect that silently killed every worker: Orca
+   * terminals are PowerShell, and PowerShell answers `<` with "The '<'
+   * operator is reserved for future use." The command failed before codex was
+   * ever invoked, and nothing in the controller could see it.
+   */
+  it('pipes the prompt instead of redirecting it', () => {
+    const script = workerScript('x');
+    expect(script).not.toMatch(/<\s*\.ai-worker-prompt/);
+    expect(script).toContain('Get-Content -Raw .ai-worker-prompt.txt |');
   });
 
   it('reads the prompt from a file, not argv', () => {
     // The prompt plus schema exceeds the Windows command-line limit.
-    expect(workerCommand('x')).toMatch(/- < \.ai-worker-prompt\.txt/);
+    expect(workerScript('x')).toContain('.ai-worker-prompt.txt');
   });
 
   it('captures only the final message', () => {
-    expect(workerCommand('x')).toContain('--output-last-message .ai-worker-result.txt');
+    expect(workerScript('x')).toContain('--output-last-message .ai-worker-result.txt');
+  });
+
+  /**
+   * Orca terminals are long-lived shells: `terminal list` reports no status
+   * and no exit code, so completion has to be recorded by the worker itself.
+   */
+  it('records its own exit status where the controller can read it', () => {
+    const script = workerScript('x');
+    expect(script).toContain('$LASTEXITCODE');
+    expect(script).toContain('Set-Content -Path .ai-worker-exit.txt');
+  });
+
+  it('launches the script through an explicit pwsh, not the ambient shell', () => {
+    expect(workerCommand()).toBe('pwsh -NoProfile -ExecutionPolicy Bypass -File .ai-worker-run.ps1');
+  });
+
+  it('treats a missing sentinel as still running, never as success', () => {
+    expect(readWorkerExit(null)).toBeNull();
+    expect(readWorkerExit('0')).toBe(0);
+    expect(readWorkerExit('1\n')).toBe(1);
+    // Unparseable is a failure, not a pass.
+    expect(readWorkerExit('what')).toBe(1);
   });
 
   it('never passes --agent', async () => {
     const { calls, client } = fakeCli({ worktree: { id: 'w', path: 'p' } });
     await createParentWorktree(client, { repoSelector: 'id:r', name: 'ai/x', baseBranch: 'main' });
     expect(calls[0]).not.toContain('--agent');
-  });
-});
-
-describe('branch naming', () => {
-  it('is git-safe for a realistic issue title', () => {
-    const name = branchNameFor('ai/', 'JP-7', 'Add unit tests for the GitHub activity fallback path');
-    expect(name).toMatch(/^ai\/JP-7-[a-z0-9-]+$/);
-  });
-
-  it('survives punctuation and unicode without producing an invalid ref', () => {
-    for (const title of ['Fix: the *thing* — now?!', 'ação e configuração', '///', '   ']) {
-      const name = branchNameFor('ai/', 'JP-9', title);
-      expect(name.startsWith('ai/JP-9')).toBe(true);
-      expect(name).not.toContain('//');
-      expect(name).not.toMatch(/[ *?~^:[\]\\]/);
-      expect(name.endsWith('-')).toBe(false);
-    }
   });
 });

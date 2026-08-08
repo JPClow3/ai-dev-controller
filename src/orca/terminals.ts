@@ -108,34 +108,70 @@ export async function launchAgent(
   ]);
 }
 
-/** Where a worker's prompt and final message live inside its worktree. */
+/** Where a worker's prompt, final message and exit status live in its worktree. */
 export const WORKER_PROMPT_FILE = '.ai-worker-prompt.txt';
 export const WORKER_RESULT_FILE = '.ai-worker-result.txt';
+export const WORKER_SCRIPT_FILE = '.ai-worker-run.ps1';
+export const WORKER_EXIT_FILE = '.ai-worker-exit.txt';
 
 /**
- * The command that runs a worker inside its worktree.
+ * The launcher script a worker terminal runs.
  *
- * Uses `codex exec` directly rather than a registered Orca custom agent.
- * Custom agents can only be added through the desktop GUI, which would make
- * the whole pipeline un-runnable from a script; a plain command has no such
- * dependency. The prompt is redirected from a file because it exceeds the
- * Windows command-line limit.
+ * Written to a file and executed with an explicit `pwsh -File` rather than
+ * typed into the terminal as a one-liner, for two reasons found by running it:
+ *
+ *   1. Orca terminals are PowerShell, and PowerShell has no `<` operator — the
+ *      previous inline command died on "The '<' operator is reserved for
+ *      future use." before codex was ever invoked. `Get-Content | codex -`
+ *      is the portable equivalent.
+ *
+ *   2. Orca terminals are long-lived shells with no exit code and no status in
+ *      `terminal list`, so the controller cannot observe completion through
+ *      Orca at all. The script records the exit status itself, which also
+ *      survives a controller or Orca restart in a way terminal state does not.
  */
-export function workerCommand(profile: string): string {
-  return [
+export function workerScript(profile: string): string {
+  const codex = [
     'codex exec',
     `--profile ${profile}`,
     '--sandbox workspace-write',
     '--skip-git-repo-check',
     `--output-last-message ${WORKER_RESULT_FILE}`,
-    `- < ${WORKER_PROMPT_FILE}`,
+    '-',
   ].join(' ');
+
+  return [
+    '$ErrorActionPreference = "Continue"',
+    `Get-Content -Raw ${WORKER_PROMPT_FILE} | ${codex}`,
+    '$code = $LASTEXITCODE',
+    'if ($null -eq $code) { $code = 0 }',
+    `Set-Content -Path ${WORKER_EXIT_FILE} -Value $code -Encoding ascii`,
+    'Write-Host "ai-dev worker finished with exit $code"',
+    '',
+  ].join('\n');
 }
 
-/** Launches a worker from a prompt file already written into the worktree. */
+/** The command Orca types into the worker's terminal. */
+export function workerCommand(): string {
+  return `pwsh -NoProfile -ExecutionPolicy Bypass -File ${WORKER_SCRIPT_FILE}`;
+}
+
+/**
+ * A worker's terminal state, read from the worktree rather than from Orca.
+ *
+ * `null` means the worker has not written its sentinel yet, which is the only
+ * evidence available that it is still working.
+ */
+export function readWorkerExit(exitFileContents: string | null): number | null {
+  if (exitFileContents === null) return null;
+  const parsed = Number.parseInt(exitFileContents.trim(), 10);
+  return Number.isFinite(parsed) ? parsed : 1;
+}
+
+/** Launches a worker from the prompt and script already written into the worktree. */
 export async function launchWorker(
   client: OrcaClient,
-  input: { worktreeSelector: string; profile: string; title: string },
+  input: { worktreeSelector: string; title: string },
 ): Promise<OrcaTerminal> {
   return unwrapTerminal(
     await client.json([
@@ -144,7 +180,7 @@ export async function launchWorker(
       '--worktree',
       input.worktreeSelector,
       '--command',
-      workerCommand(input.profile),
+      workerCommand(),
       '--title',
       input.title,
     ]),
