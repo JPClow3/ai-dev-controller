@@ -67,6 +67,7 @@ function deps(over: Partial<OrchestratorDeps> = {}): OrchestratorDeps {
       findings: [],
       criteria: [{ id: 'AC-1', status: 'satisfied' as const }],
     })),
+    pullRequestIsDraft: vi.fn(async () => true),
     writeProvenanceBody: vi.fn(async () => undefined),
     remediationCycles: () => 0,
     originalAuthors: () => ['deepseek_flash'],

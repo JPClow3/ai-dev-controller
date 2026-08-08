@@ -32,7 +32,14 @@ export interface RunnerDeps {
   reconcile: () => Promise<number>;
   /** Issues carrying `ai-ready`, plus their explicit blockers. */
   fetchReadyIssues: () => Promise<
-    Array<{ identifier: string; projectName: string | null; description: string; labels: string[]; blockedBy: string[] }>
+    Array<{
+      identifier: string;
+      title?: string;
+      projectName: string | null;
+      description: string;
+      labels: string[];
+      blockedBy: string[];
+    }>
   >;
   /** Merged PRs, which is the only thing that satisfies a dependency. */
   syncMergedPullRequests: () => Promise<string[]>;
@@ -70,6 +77,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
 
   const ready = await deps.fetchReadyIssues();
   const needsContext: string[] = [];
+  const resolvedProjects = new Map<string, string>();
 
   const schedulable: SchedulableIssue[] = [];
   for (const issue of ready) {
@@ -84,7 +92,31 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
       await deps.markNeedsContext(issue.identifier, resolution.message);
       continue;
     }
+    // Mirror the registry into the database first: `issues.project_id` and
+    // `runs.issue_id` are foreign keys with `foreign_keys` ON, so inserting an
+    // issue for a project row that does not exist fails with a constraint
+    // error rather than a clean refusal.
+    const entry = deps.config.registry.projects[resolution.projectId];
+    if (entry) {
+      deps.repos.upsertProject({
+        id: resolution.projectId,
+        enabled: entry.enabled,
+        repoPath: entry.repository.path,
+        githubSlug: entry.repository.github,
+        baseBranch: entry.repository.baseBranch,
+        linearProject: entry.linear.project ?? null,
+        knowledgeStatus: entry.knowledgeStatus,
+        maxAgents: entry.maxAgents ?? deps.config.global.concurrency.agentsPerRepository,
+        routingProfile: entry.routingProfile,
+      });
+    }
+    deps.repos.upsertIssue({
+      id: issue.identifier,
+      projectId: resolution.projectId,
+      title: issue.title ?? null,
+    });
     deps.repos.setDependencies(issue.identifier, issue.blockedBy);
+    resolvedProjects.set(issue.identifier, resolution.projectId);
     schedulable.push({
       identifier: issue.identifier,
       blockedBy: issue.blockedBy,
@@ -116,6 +148,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
     ...wave.issues.map<WorkItem>((identifier) => ({
       kind: 'NEW_READY_ISSUE',
       issueId: identifier,
+      ...(resolvedProjects.has(identifier) ? { projectId: resolvedProjects.get(identifier)! } : {}),
       enqueuedAt: startedAt,
     })),
   ]);
@@ -175,8 +208,10 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
 }
 
 function projectFor(item: WorkItem, deps: RunnerDeps): string {
-  const run = deps.repos.getActiveRun(item.issueId);
-  return run?.repositoryId ?? 'unknown';
+  // Prefer the resolution carried on the item: a new issue has no run, and
+  // falling back to a literal 'unknown' would count every new issue's
+  // per-repository limit against one fictional repository.
+  return item.projectId ?? deps.repos.getActiveRun(item.issueId)?.repositoryId ?? 'unresolved';
 }
 
 export interface LoopOptions {

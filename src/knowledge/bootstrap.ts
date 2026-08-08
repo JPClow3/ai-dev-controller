@@ -37,7 +37,7 @@ export interface BootstrapInput {
 export function planBootstrap(input: BootstrapInput): BootstrapPlan {
   const candidates = discoverKnowledgeFiles(input.repoPath, input.discovery);
   const derived = deriveProject(input.repoPath, input.baseBranch);
-  const ciTrigger = detectCiTrigger(input.repoPath);
+  const ciTrigger = detectCiTrigger(input.repoPath, input.baseBranch);
 
   const classified =
     input.classified ??

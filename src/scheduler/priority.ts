@@ -22,6 +22,14 @@ export interface WorkItem {
   kind: WorkKind;
   issueId: string;
   taskKey?: string;
+  /**
+   * Registry project the issue resolved to.
+   *
+   * Carried on the item because a NEW_READY_ISSUE has no run yet, so it cannot
+   * be looked up from run state — reading it from `getActiveRun` returns null
+   * exactly when it is needed, and every new issue gets skipped forever.
+   */
+  projectId?: string;
   /** ISO timestamp used to break ties in favour of older work. */
   enqueuedAt: string;
 }

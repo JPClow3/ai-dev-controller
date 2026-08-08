@@ -37,7 +37,21 @@
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
           "summary": { "type": "string" },
-          "task_category": { "type": "string" },
+          "task_category": {
+            "description": "Must be a role declared in config/routing.yaml. A free-form value cannot be routed, and previously produced an uncaught throw inside the orchestrator.",
+            "enum": [
+              "issue_cleanup",
+              "requirement_cleanup",
+              "routine_mechanical",
+              "routine_behavior",
+              "routine_bugfix",
+              "unit_tests",
+              "multi_file_feature",
+              "large_context",
+              "orchestrator",
+              "high_risk"
+            ]
+          },
           "recommended_alias": {
             "enum": [
               "cheap_structured",

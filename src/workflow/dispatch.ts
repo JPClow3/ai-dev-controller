@@ -141,6 +141,15 @@ export async function dispatchNewIssue(
     agent: deps.agentNameFor(decision.alias),
   });
 
+  // Without this the run row keeps a NULL branch, base sha and worktree id,
+  // and the very next step interpolates "id:null" into an Orca selector and
+  // diffs against a stale local ref instead of the commit it branched from.
+  deps.repos.attachRunWorkspace(run.id, {
+    branch,
+    baseSha,
+    orcaWorktreeId: worktree.id,
+  });
+
   log.info(
     `${input.issueId}: started on ${decision.alias} (${decision.reason}) at ${branch} from ${baseSha.slice(0, 8)}`,
   );
@@ -179,10 +188,11 @@ export function createDispatcher(deps: DispatchDeps) {
       return;
     }
 
-    const issue = deps.repos.getActiveRun(item.issueId);
-    const projectId = issue?.repositoryId;
+    // The runner resolved this when it read the issue; a new issue has no run
+    // to look it up from.
+    const projectId = item.projectId ?? deps.repos.getActiveRun(item.issueId)?.repositoryId;
     if (!projectId) {
-      log.warn(`${item.issueId}: no resolved repository; skipping`);
+      log.warn(`${item.issueId}: no resolved repository on the work item; skipping`);
       return;
     }
 

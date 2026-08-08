@@ -215,6 +215,202 @@ export function createRepositories(db: ControllerDatabase) {
         .run(runId, pr.number, pr.url, pr.draft ? 1 : 0, pr.headBranch, pr.baseBranch);
     },
 
+    /**
+     * Records where a run's work physically lives.
+     *
+     * Without this the run row keeps NULL branch/base_sha/worktree, so the
+     * next step interpolates "id:null" into an Orca selector and diffs against
+     * a stale local ref instead of the commit the run was branched from.
+     */
+    attachRunWorkspace(
+      runId: string,
+      workspace: { branch?: string; baseSha?: string; orcaWorktreeId?: string },
+    ): void {
+      db.raw
+        .prepare(
+          `UPDATE runs SET
+             branch = COALESCE(?, branch),
+             base_sha = COALESCE(?, base_sha),
+             orca_worktree_id = COALESCE(?, orca_worktree_id)
+           WHERE id = ?`,
+        )
+        .run(workspace.branch ?? null, workspace.baseSha ?? null, workspace.orcaWorktreeId ?? null, runId);
+    },
+
+    /** Persists the planner's decomposition so integration has something to read. */
+    recordTasks(
+      runId: string,
+      tasks: Array<{
+        id: string;
+        summary?: string;
+        task_category?: string;
+        owns?: string[];
+        blocked_by?: string[];
+        acceptance_criteria?: string[];
+        risk?: string;
+        branch?: string;
+        orcaWorktreeId?: string;
+      }>,
+    ): void {
+      const insert = db.raw.prepare(
+        `INSERT INTO tasks (run_id, task_key, summary, role, risk, owns_json, blocked_by_json, criteria_json, branch, orca_worktree_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(run_id, task_key) DO UPDATE SET
+           summary=excluded.summary, role=excluded.role, risk=excluded.risk,
+           owns_json=excluded.owns_json, blocked_by_json=excluded.blocked_by_json,
+           criteria_json=excluded.criteria_json, branch=excluded.branch,
+           orca_worktree_id=excluded.orca_worktree_id`,
+      );
+      db.transaction(() => {
+        for (const task of tasks) {
+          insert.run(
+            runId,
+            task.id,
+            task.summary ?? null,
+            task.task_category ?? null,
+            task.risk ?? 'low',
+            JSON.stringify(task.owns ?? []),
+            JSON.stringify(task.blocked_by ?? []),
+            JSON.stringify(task.acceptance_criteria ?? []),
+            task.branch ?? null,
+            task.orcaWorktreeId ?? null,
+          );
+        }
+      });
+    },
+
+    /**
+     * Records one model attempt against a task.
+     *
+     * These rows are what integration, reviewer selection and the provenance
+     * body all read. With the table empty, cross-family reviewer choice
+     * silently degrades to "first candidate" without any error.
+     */
+    recordAttempt(
+      runId: string,
+      taskKey: string,
+      attempt: { aliasId: string; role: string; isChallenger?: boolean; result?: unknown; failureClass?: string },
+    ): number {
+      return db.transaction(() => {
+        const task = db.raw
+          .prepare('SELECT id FROM tasks WHERE run_id = ? AND task_key = ?')
+          .get(runId, taskKey) as { id: number } | undefined;
+        if (!task) throw new Error(`No task "${taskKey}" for run ${runId}`);
+
+        const next = db.raw
+          .prepare('SELECT COALESCE(MAX(attempt_no), 0) + 1 AS n FROM attempts WHERE task_id = ?')
+          .get(task.id) as { n: number };
+
+        const info = db.raw
+          .prepare(
+            `INSERT INTO attempts (task_id, attempt_no, alias_id, role, is_challenger, result_json, failure_class)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            task.id,
+            next.n,
+            attempt.aliasId,
+            attempt.role,
+            attempt.isChallenger ? 1 : 0,
+            attempt.result === undefined ? null : JSON.stringify(attempt.result),
+            attempt.failureClass ?? null,
+          );
+        return Number(info.lastInsertRowid);
+      });
+    },
+
+    recordReview(runId: string, review: { stage?: string; reviewer?: { id?: string }; verdict: string; findings?: unknown; criteria?: unknown }): void {
+      db.raw
+        .prepare(
+          `INSERT INTO reviews (run_id, stage, reviewer_alias, verdict, findings_json, criteria_json, cycle)
+           VALUES (?, ?, ?, ?, ?, ?, (SELECT COUNT(*) + 1 FROM reviews WHERE run_id = ?))`,
+        )
+        .run(
+          runId,
+          review.stage ?? 'final',
+          review.reviewer?.id ?? 'unknown',
+          review.verdict,
+          JSON.stringify(review.findings ?? []),
+          JSON.stringify(review.criteria ?? []),
+          runId,
+        );
+    },
+
+    /** The most recent review, so PR_READY reports the verdict actually given. */
+    lastReview(runId: string): {
+      verdict: 'approve' | 'request_changes' | 'escalate';
+      issue_id: string;
+      stage: 'integration' | 'final';
+      reviewer: { id: string };
+      findings: never[];
+      criteria: Array<{ id: string; status: 'satisfied' | 'unsatisfied' | 'uncertain' }>;
+    } | null {
+      const row = db.raw
+        .prepare('SELECT stage, reviewer_alias, verdict, findings_json, criteria_json FROM reviews WHERE run_id = ? ORDER BY id DESC LIMIT 1')
+        .get(runId) as
+        | { stage: string; reviewer_alias: string; verdict: string; findings_json: string; criteria_json: string }
+        | undefined;
+      if (!row) return null;
+      const parse = <T>(json: string, fallback: T): T => {
+        try {
+          return JSON.parse(json) as T;
+        } catch {
+          return fallback;
+        }
+      };
+      return {
+        verdict: row.verdict as 'approve' | 'request_changes' | 'escalate',
+        issue_id: '',
+        stage: row.stage as 'integration' | 'final',
+        reviewer: { id: row.reviewer_alias },
+        findings: parse(row.findings_json, [] as never[]),
+        criteria: parse(row.criteria_json, [] as Array<{ id: string; status: 'satisfied' | 'unsatisfied' | 'uncertain' }>),
+      };
+    },
+
+    recordValidation(runId: string, summary: { passed: boolean; results: unknown[] }): void {
+      db.raw
+        .prepare(
+          `INSERT INTO ci_runs (run_id, head_sha, status, conclusion, checks_json)
+           VALUES (?, 'local', 'completed', ?, ?)`,
+        )
+        .run(runId, summary.passed ? 'success' : 'failure', JSON.stringify(summary.results));
+    },
+
+    lastValidation(runId: string): { passed: boolean; failedRequired: string[]; results: Array<{ name: string; passed: boolean }> } | null {
+      const row = db.raw
+        .prepare(`SELECT conclusion, checks_json FROM ci_runs WHERE run_id = ? AND head_sha = 'local' ORDER BY id DESC LIMIT 1`)
+        .get(runId) as { conclusion: string; checks_json: string } | undefined;
+      if (!row) return null;
+      try {
+        const results = JSON.parse(row.checks_json) as Array<{ name: string; passed: boolean }>;
+        return {
+          passed: row.conclusion === 'success',
+          failedRequired: results.filter((r) => !r.passed).map((r) => r.name),
+          results,
+        };
+      } catch {
+        return null;
+      }
+    },
+
+    recordRemediationPlan(runId: string, tasks: unknown[]): void {
+      db.raw.prepare('UPDATE runs SET plan_json = ? WHERE id = ?').run(JSON.stringify(tasks), runId);
+    },
+
+    pendingRemediation(runId: string): unknown[] {
+      const row = db.raw.prepare('SELECT plan_json FROM runs WHERE id = ?').get(runId) as
+        | { plan_json: string | null }
+        | undefined;
+      if (!row?.plan_json) return [];
+      try {
+        const parsed = JSON.parse(row.plan_json) as unknown;
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    },
+
     activeRuns(): RunRecord[] {
       return (db.raw.prepare(`SELECT * FROM runs WHERE ${ACTIVE_CLAUSE} ORDER BY started_at`).all() as RunDbRow[])
         .map(toRun);

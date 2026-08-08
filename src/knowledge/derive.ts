@@ -99,18 +99,75 @@ function fileContains(path: string, needle: string): boolean {
 }
 
 /** Detects how CI fires, so the registry's ci.trigger is measured not guessed. */
-export function detectCiTrigger(repoPath: string): 'pull_request' | 'branch_push' | 'none' {
+export function detectCiTrigger(
+  repoPath: string,
+  baseBranch = 'main',
+): 'pull_request' | 'branch_push' | 'none' {
   const dir = join(repoPath, '.github/workflows');
   if (!existsSync(dir)) return 'none';
   const files = readdirSync(dir).filter((f) => /\.ya?ml$/i.test(f));
   if (files.length === 0) return 'none';
 
+  let anyBranchPush = false;
+
   for (const file of files) {
     const text = readFileSync(join(dir, file), 'utf8');
     const on = /^on:\s*([\s\S]*?)(?=^\S)/m.exec(text)?.[1] ?? '';
-    if (on.includes('pull_request')) return 'pull_request';
+
+    // A `pull_request:` trigger filtered to branches that do not include this
+    // repository's default fires for nothing. Portfolio's workflow targets
+    // `master` while the repo is on `main`, so every check is dormant and the
+    // controller would otherwise wait forever for CI that cannot start.
+    if (on.includes('pull_request')) {
+      const filter = branchFilterFor(on, 'pull_request');
+      if (!filter || filter.includes(baseBranch)) return 'pull_request';
+    }
+
+    // A push trigger only helps if it is unfiltered: the controller pushes
+    // `ai/*` branches, which a `branches:` list will not match.
+    if (/^\s*push:/m.test(on) && branchFilterFor(on, 'push') === null) anyBranchPush = true;
   }
-  return 'branch_push';
+
+  return anyBranchPush ? 'branch_push' : 'none';
+}
+
+/**
+ * Branch names a `pull_request:` trigger is restricted to, or null when
+ * unrestricted.
+ *
+ * Line-based rather than one regex: the nesting is indentation-sensitive and a
+ * lazy multiline match is easy to get subtly wrong.
+ */
+export function branchFilterFor(onBlock: string, trigger: 'pull_request' | 'push'): string[] | null {
+  const lines = onBlock.split('\n');
+  const start = lines.findIndex((l) => new RegExp(`^\\s*${trigger}:`).test(l));
+  if (start === -1) return null;
+
+  const baseIndent = (/^(\s*)/.exec(lines[start]!)?.[1] ?? '').length;
+  const branches: string[] = [];
+  let seenBranchesKey = false;
+
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    if (!line.trim()) continue;
+    const indent = (/^(\s*)/.exec(line)?.[1] ?? '').length;
+    if (indent <= baseIndent) break; // left the pull_request block
+
+    const inline = /branches:\s*\[([^\]]*)\]/.exec(line);
+    if (inline) {
+      branches.push(...inline[1]!.split(',').map((b) => b.trim().replace(/['"]/g, '')).filter(Boolean));
+      seenBranchesKey = true;
+      continue;
+    }
+    if (/^\s*branches:\s*$/.test(line)) {
+      seenBranchesKey = true;
+      continue;
+    }
+    const item = /^\s*-\s*(.+?)\s*$/.exec(line);
+    if (seenBranchesKey && item) branches.push(item[1]!.replace(/['"]/g, ''));
+  }
+
+  return seenBranchesKey ? branches : null;
 }
 
 export function renderProjectYaml(id: string, derived: DerivedProject): string {

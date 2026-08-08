@@ -16,7 +16,7 @@ import { readChecks } from '../github/checks.js';
 import { renderPrBody, renderStubPrBody } from '../github/pr-body.js';
 import { readValidationCommands, runRequiredValidation } from '../validation/local.js';
 import { buildFinalReviewPacket, renderPacket } from '../reviews/packet.js';
-import type { ReviewResult } from '../reviews/review.js';
+import { toPrComments, type ReviewResult } from '../reviews/review.js';
 import { authorshipByFamily } from '../routing/selector.js';
 import { selectModel, type SelectorDeps } from '../routing/selector.js';
 import { postBlockerQuestion } from '../linear/dependencies.js';
@@ -129,16 +129,39 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       const parent = ctx.run.orcaWorktreeId;
       if (!parent) throw new Error(`Run ${ctx.run.id} has no parent worktree`);
 
+      // Persist the decomposition first: integration, reviewer selection and
+      // the provenance body all read these rows, and a crash between creating
+      // a worktree and recording it would orphan the work.
+      repos.recordTasks(ctx.run.id, tasks);
+
       for (const task of tasks) {
+        // A planner may return a task_category that is not a declared routing
+        // role. Falling back is right; throwing here would escape advanceRun.
+        const role = wiring.routing.routing.roles[task.task_category]
+          ? task.task_category
+          : 'routine_behavior';
+        if (role !== task.task_category) {
+          log.warn(`${ctx.run.issueId}/${task.id}: unknown task_category "${task.task_category}", routing as ${role}`);
+        }
+
         const decision = selectModel(
-          { projectId: ctx.projectId, role: task.task_category, risk: task.risk ?? 'low' },
+          { projectId: ctx.projectId, role, risk: task.risk ?? 'low' },
           wiring.routing,
         );
-        await createWorkerWorktree(orca, {
+        const worktree = await createWorkerWorktree(orca, {
           parentSelector: `id:${parent}`,
           name: `${ctx.branch}/${task.id}`,
           agent: wiring.agentNameFor(decision.alias),
           prompt: workerPrompt(ctx, task),
+        });
+
+        repos.recordTasks(ctx.run.id, [
+          { ...task, branch: worktree.branch ?? `${ctx.branch}/${task.id}`, orcaWorktreeId: worktree.id },
+        ]);
+        repos.recordAttempt(ctx.run.id, task.id, {
+          aliasId: decision.alias,
+          role: 'worker',
+          isChallenger: decision.isChallenger,
         });
         log.info(`${ctx.run.issueId}/${task.id}: dispatched to ${decision.alias}`);
       }
@@ -165,7 +188,11 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
 
     async runValidation(ctx) {
       const commands = readValidationCommands(repoPath(ctx));
-      return runRequiredValidation(repoPath(ctx), commands);
+      const summary = await runRequiredValidation(repoPath(ctx), commands);
+      // Stored so the PR body reports the run that actually gated the
+      // transition, rather than a second execution whose results may differ.
+      repos.recordValidation(ctx.run.id, summary);
+      return summary;
     },
 
     async pushBranch(ctx) {
@@ -221,18 +248,37 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       return { ...data, reviewer: { ...data.reviewer, id: alias } };
     },
 
-    async writeProvenanceBody(ctx) {
+    async pullRequestIsDraft(ctx) {
+      const pr = await findPullRequestByBranch(github, slug(ctx), ctx.branch);
+      return pr?.isDraft === true;
+    },
+
+    async writeProvenanceBody(ctx, assessment) {
       const pr = await findPullRequestByBranch(github, slug(ctx), ctx.branch);
       if (!pr) throw new Error(`No pull request for ${ctx.branch}`);
 
-      const validation = await this.runValidation(ctx);
+      const validation = repos.lastValidation(ctx.run.id) ?? (await this.runValidation(ctx));
       const criteria = repos.acceptanceCriteria(ctx.run.issueId);
       const attempts = repos.attemptSummary(ctx.run.id);
+
+      // Criterion status comes from the reviewer, never assumed. Hardcoding
+      // `satisfied: true` made the deliverable claim success it had not
+      // established.
+      const unsatisfied = new Set([
+        ...(assessment?.unsatisfiedCriteria ?? []),
+        ...(assessment?.uncertainCriteria ?? []),
+      ]);
+      const reviewed = assessment !== null;
 
       const body = renderPrBody({
         issueId: ctx.run.issueId,
         summary: issueContract(ctx).split('\n').slice(0, 3).join(' '),
-        criteria: criteria.map((c) => ({ id: c.id, statement: c.statement, satisfied: true })),
+        criteria: criteria.map((c) => ({
+          id: c.id,
+          statement: c.statement,
+          // With no review recorded nothing is established, so nothing is ticked.
+          satisfied: reviewed && !unsatisfied.has(c.id),
+        })),
         implementationNotes: attempts.map((a) => `- ${a.alias}: ${a.role}`).join('\n'),
         validation: validation.results.map((r) => ({ name: r.name, passed: r.passed })),
         planner: attempts.find((a) => a.role === 'planner')?.alias ?? 'unknown',
@@ -240,8 +286,9 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
         integrationReviewer: attempts.find((a) => a.role === 'integration_reviewer')?.alias ?? null,
         finalReviewer: attempts.find((a) => a.role === 'final_reviewer')?.alias ?? 'unknown',
         knowledgeStatus: project(ctx).knowledgeStatus === 'verified' ? 'VERIFIED' : 'UNVERIFIED',
-        risks: [],
-        reviewNotes: [],
+        risks: unsatisfied.size > 0 ? [`${unsatisfied.size} acceptance criterion/criteria not established`] : [],
+        // Non-blocking findings reach the human here or nowhere.
+        reviewNotes: assessment ? toPrComments(assessment) : ['No review was recorded for this run.'],
         ...(ctx.run.baseSha ? { baseSha: ctx.run.baseSha } : {}),
         remediationCycles: repos.remediationCycles(ctx.run.id),
       });

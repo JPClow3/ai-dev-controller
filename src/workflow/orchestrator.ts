@@ -7,7 +7,7 @@ import type { TransitionEvidence } from './transitions.js';
 import { InvalidTransitionError } from './transitions.js';
 import type { ValidationSummary } from '../validation/result.js';
 import type { ChecksSummary } from '../github/checks.js';
-import { assessReview, type ReviewResult } from '../reviews/review.js';
+import { assessReview, type ReviewResult, type ReviewAssessment } from '../reviews/review.js';
 import { planRemediation } from '../reviews/remediation.js';
 import { overlappingOwnership } from '../git/integration.js';
 import { logger } from '../util/log.js';
@@ -57,9 +57,16 @@ export interface OrchestratorDeps {
   pushBranch: (ctx: StepContext) => Promise<void>;
   ensureDraftPr: (ctx: StepContext) => Promise<{ number: number }>;
   readChecks: (ctx: StepContext) => Promise<ChecksSummary>;
+  /** Read from GitHub, never assumed. */
+  pullRequestIsDraft: (ctx: StepContext) => Promise<boolean>;
 
   review: (ctx: StepContext) => Promise<ReviewResult>;
-  writeProvenanceBody: (ctx: StepContext) => Promise<void>;
+  /**
+   * The assessment is threaded through rather than recomputed, so the PR body
+   * reports what the reviewer actually concluded. Rendering it independently
+   * is how a body ends up claiming every criterion passed.
+   */
+  writeProvenanceBody: (ctx: StepContext, assessment: ReviewAssessment | null) => Promise<void>;
 
   remediationCycles: (runId: string) => number;
   originalAuthors: (runId: string) => string[];
@@ -273,6 +280,9 @@ async function stepCi(ctx: StepContext, deps: OrchestratorDeps): Promise<StepRes
 
 async function stepFinalReview(ctx: StepContext, deps: OrchestratorDeps): Promise<StepResult> {
   const review = await deps.review(ctx);
+  // Recorded before it is acted on, so PR_READY and any restart see the same
+  // verdict rather than re-deriving one.
+  deps.repos.recordReview(ctx.run.id, review);
   const assessment = assessReview(review, deps.config.escalation.reviewRemediation.blockingSeverities);
 
   if (assessment.inconsistencies.length > 0) {
@@ -306,6 +316,10 @@ async function stepFinalReview(ctx: StepContext, deps: OrchestratorDeps): Promis
       });
     }
 
+    // The plan is carried into REMEDIATING rather than discarded; dispatching
+    // an empty list is what turned remediation into a no-op that span until
+    // the budget ran out.
+    deps.repos.recordRemediationPlan(ctx.run.id, plan.tasks);
     return move(ctx, deps, 'REMEDIATING', {
       reason: `${assessment.blocking.length} blocking finding(s)`,
       recommendedBy: review.reviewer.id,
@@ -325,7 +339,22 @@ async function stepFinalReview(ctx: StepContext, deps: OrchestratorDeps): Promis
 }
 
 async function stepPrReady(ctx: StepContext, deps: OrchestratorDeps): Promise<StepResult> {
-  await deps.writeProvenanceBody(ctx);
+  // Re-read the recorded review so the body reflects the actual verdict even
+  // if the controller restarted between FINAL_REVIEW and here.
+  const recorded = deps.repos.lastReview(ctx.run.id);
+  const assessment = recorded
+    ? assessReview(recorded, deps.config.escalation.reviewRemediation.blockingSeverities)
+    : null;
+
+  await deps.writeProvenanceBody(ctx, assessment);
+
+  // Draft state is verified against the real pull request, not asserted.
+  const isDraft = await deps.pullRequestIsDraft(ctx);
+  if (!isDraft) {
+    const reason = 'the pull request is not a draft; refusing to present it as controller output';
+    await deps.blockForHuman(ctx, 'pr_not_draft', reason);
+    return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
+  }
 
   return move(ctx, deps, 'PR_OPEN', {
     reason: 'provenance written; ready for human review',
@@ -341,7 +370,13 @@ async function stepRemediating(ctx: StepContext, deps: OrchestratorDeps): Promis
     return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
   }
 
-  await deps.dispatchRemediation(ctx, []);
+  const pending = deps.repos.pendingRemediation(ctx.run.id);
+  if (pending.length === 0) {
+    const reason = 'remediation requested but no remediation tasks were recorded';
+    await deps.blockForHuman(ctx, 'remediation_empty', reason);
+    return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
+  }
+  await deps.dispatchRemediation(ctx, pending);
 
   return move(ctx, deps, 'IMPLEMENTING', {
     reason: `remediation cycle ${cycles + 1} dispatched`,

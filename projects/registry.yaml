@@ -74,6 +74,11 @@ projects:
       trigger: pull_request
       required_checks: []
 
+  # CI is DORMANT: .github/workflows/build.yml triggers on `branches: [master]`
+  # for both push and pull_request, but this repository is on `main`. No check
+  # has ever run. Declared `none` so the controller treats local validation as
+  # the authority instead of waiting forever for checks that cannot start.
+  # Fix the workflow's branch filter to re-enable `pull_request`.
   portfolio:
     enabled: true
     repository:
@@ -89,7 +94,7 @@ projects:
     validation:
       source: repository
     ci:
-      trigger: pull_request
+      trigger: none
       required_checks: []
 
   # Default branch is master, not main.
