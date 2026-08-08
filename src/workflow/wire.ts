@@ -276,6 +276,7 @@ export function buildController(options: WiringOptions) {
           description: contract.description,
           labels: issue.labels,
           blockedBy: contract.blockedBy,
+          url: contract.url,
         });
       }
       return out;

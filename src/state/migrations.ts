@@ -247,7 +247,21 @@ CREATE TABLE IF NOT EXISTS human_escalations (
 );
 `;
 
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, name: 'init', sql: INIT }];
+/**
+ * The Linear URL, so the pull request can link the issue rather than name it.
+ *
+ * `## Linear` in the PR body rendered a bare `JP-8`: the renderer accepted an
+ * optional `issueUrl` and nothing ever supplied one, because the URL was read
+ * from Linear and then dropped.
+ */
+const ISSUE_URL = `
+ALTER TABLE issues ADD COLUMN url TEXT;
+`;
+
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, name: 'init', sql: INIT },
+  { version: 2, name: 'issue_url', sql: ISSUE_URL },
+];
 
 export function applyMigrations(db: BetterSqlite3.Database): number {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (

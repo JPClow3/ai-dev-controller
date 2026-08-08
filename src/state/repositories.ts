@@ -140,8 +140,8 @@ export function createRepositories(db: ControllerDatabase) {
     ): void {
       db.raw
         .prepare(
-          `INSERT INTO issues (id, project_id, title, role, risk, state, acceptance_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO issues (id, project_id, title, role, risk, state, acceptance_json, url)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              project_id=excluded.project_id, title=excluded.title,
              role=excluded.role, risk=excluded.risk, updated_at=datetime('now'),
@@ -151,7 +151,8 @@ export function createRepositories(db: ControllerDatabase) {
              acceptance_json=CASE
                WHEN excluded.acceptance_json IN ('[]', '') THEN issues.acceptance_json
                ELSE excluded.acceptance_json
-             END`,
+             END,
+             url=COALESCE(excluded.url, issues.url)`,
         )
         .run(
           issue.id,
@@ -161,6 +162,7 @@ export function createRepositories(db: ControllerDatabase) {
           issue.risk ?? null,
           issue.state ?? 'DISCOVERED',
           JSON.stringify(issue.acceptanceCriteria ?? []),
+          issue.url ?? null,
         );
       // Keep the raw Linear description available even before the curator has
       // run. Without it the planner receives a placeholder and correctly
@@ -584,6 +586,13 @@ export function createRepositories(db: ControllerDatabase) {
         | { curated_body: string | null }
         | undefined;
       return row?.curated_body ?? null;
+    },
+
+    issueUrl(issueId: string): string | null {
+      const row = db.raw.prepare('SELECT url FROM issues WHERE id = ?').get(issueId) as
+        | { url: string | null }
+        | undefined;
+      return row?.url ?? null;
     },
 
     acceptanceCriteria(issueId: string): Array<{ id: string; statement: string }> {

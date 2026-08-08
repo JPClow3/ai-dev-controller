@@ -39,6 +39,7 @@ export interface RunnerDeps {
       description: string;
       labels: string[];
       blockedBy: string[];
+      url?: string;
     }>
   >;
   /** Merged PRs, which is the only thing that satisfies a dependency. */
@@ -120,6 +121,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
       title: issue.title ?? null,
       body: issue.description,
       acceptanceCriteria: parseAcceptanceCriteria(issue.description ?? ''),
+      url: issue.url ?? null,
     });
     deps.repos.setDependencies(issue.identifier, issue.blockedBy);
     resolvedProjects.set(issue.identifier, resolution.projectId);
