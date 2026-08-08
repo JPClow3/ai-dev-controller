@@ -150,9 +150,19 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     mkdirSync(controlDir, { recursive: true });
     writeFileSync(join(controlDir, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
     const setup = readSetupCommand(treePath(ctx));
+    // Resolved, not constructed: a linked worktree's git dir is wherever the
+    // `.git` file points, and the worker cannot commit without write access
+    // to it.
+    const gitCommonDir = await wiring
+      .gitRunner(worktree.path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+      .catch(() => '');
+
     writeFileSync(
       join(controlDir, WORKER_SCRIPT_FILE),
-      workerScript(profile, controlDir, setup?.command),
+      workerScript(profile, controlDir, {
+        ...(setup?.command ? { setupCommand: setup.command } : {}),
+        ...(gitCommonDir ? { gitCommonDir } : {}),
+      }),
       'utf8',
     );
 

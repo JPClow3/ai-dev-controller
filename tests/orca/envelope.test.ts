@@ -188,12 +188,27 @@ describe('worker launch needs no GUI-registered agent', () => {
    * correct, so the controller prepares the worktree instead.
    */
   it('runs the repository setup before the agent, when one is declared', () => {
-    const script = workerScript('x', CONTROL, 'npm ci');
+    const script = workerScript('x', CONTROL, { setupCommand: 'npm ci' });
     expect(script.indexOf('npm ci')).toBeLessThan(script.indexOf('codex exec'));
   });
 
   it('omits setup entirely when the repository declares none', () => {
     expect(workerScript('x', CONTROL)).not.toContain('ai-dev worker: ');
+  });
+
+  /**
+   * The first live worker finished its edits and then could not record them:
+   * a linked worktree's `.git` is a file pointing outside the sandbox root, so
+   * `git commit` died on "Unable to create .../index.lock: Permission denied"
+   * and the run reached INTEGRATING with nothing to integrate.
+   */
+  it('grants the shared git directory so the worker can commit', () => {
+    const script = workerScript('x', CONTROL, { gitCommonDir: 'H:/Code/Repo/.git' });
+    expect(script).toContain("--add-dir 'H:/Code/Repo/.git'");
+  });
+
+  it('widens nothing when no git directory is supplied', () => {
+    expect(workerScript('x', CONTROL)).not.toContain('--add-dir');
   });
 
   it('treats a missing sentinel as still running, never as success', () => {

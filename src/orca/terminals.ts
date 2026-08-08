@@ -138,7 +138,27 @@ export const WORKER_EXIT_FILE = 'exit.txt';
  *      Orca at all. The script records the exit status itself, which also
  *      survives a controller or Orca restart in a way terminal state does not.
  */
-export function workerScript(profile: string, controlDir: string, setupCommand?: string): string {
+export interface WorkerScriptOptions {
+  /** The repository's own preparation command, run before the agent. */
+  setupCommand?: string;
+  /**
+   * The shared git directory, granted to the sandbox with `--add-dir`.
+   *
+   * A linked worktree's `.git` is a *file* pointing at
+   * `<repo>/.git/worktrees/<name>`, which sits outside the sandbox's writable
+   * root. Without this the worker does the work and then cannot record it:
+   *
+   *   fatal: Unable to create '.../index.lock': Permission denied
+   *
+   * It is a real widening — the shared git dir holds every worktree's refs —
+   * but committing is the whole point of a worker, and the design already
+   * permits repository-local writes inside AI-owned worktrees.
+   */
+  gitCommonDir?: string;
+}
+
+export function workerScript(profile: string, controlDir: string, options: WorkerScriptOptions = {}): string {
+  const { setupCommand, gitCommonDir } = options;
   const q = (name: string) => `'${join(controlDir, name).replace(/'/g, "''")}'`;
 
   // The repository's own preparation, run before the agent rather than by it.
@@ -154,6 +174,7 @@ export function workerScript(profile: string, controlDir: string, setupCommand?:
     'codex exec',
     `--profile ${profile}`,
     '--sandbox workspace-write',
+    ...(gitCommonDir ? [`--add-dir '${gitCommonDir.replace(/'/g, "''")}'`] : []),
     '--skip-git-repo-check',
     `--output-last-message ${q(WORKER_RESULT_FILE)}`,
     '-',
