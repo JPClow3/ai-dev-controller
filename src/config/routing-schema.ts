@@ -9,7 +9,11 @@ const aliasSchema = z
   .object({
     family: z.enum(MODEL_FAMILIES),
     harness: z.string(),
-    provider: z.enum(['chatgpt', 'ollama']),
+    // `ollama` (cloud) and `ollama_local` are separate providers because their
+    // availability is unrelated: cloud models are subscription-gated and can
+    // return 403 while a locally pulled model on the same daemon works fine.
+    // Collapsing them would disable both whenever one is unusable.
+    provider: z.enum(['chatgpt', 'ollama', 'ollama_local']),
     profile: z.string(),
     /**
      * Underlying model tag, for providers called over HTTP rather than through

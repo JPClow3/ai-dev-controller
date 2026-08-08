@@ -134,7 +134,28 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       // a worktree and recording it would orphan the work.
       repos.recordTasks(ctx.run.id, tasks);
 
-      for (const task of tasks) {
+      // Dispatch only the tasks with no unsatisfied blockers.
+      //
+      // The ownership check deliberately PERMITS overlapping paths between
+      // sequential tasks — serialising is how the design resolves a clash.
+      // Launching every task regardless of `blocked_by` threw that guarantee
+      // away: two workers were observed editing the same file concurrently,
+      // which is precisely the corruption the rule exists to prevent.
+      const runnable = tasks.filter((t) => (t.blocked_by ?? []).length === 0);
+      const deferred = tasks.filter((t) => (t.blocked_by ?? []).length > 0);
+
+      if (runnable.length === 0 && tasks.length > 0) {
+        throw new Error(
+          `Every task in the plan declares a blocker; the dependency graph has no starting point.`,
+        );
+      }
+      for (const task of deferred) {
+        log.info(
+          `${ctx.run.issueId}/${task.id}: deferred behind ${(task.blocked_by ?? []).join(', ')}`,
+        );
+      }
+
+      for (const task of runnable) {
         // A planner may return a task_category that is not a declared routing
         // role. Falling back is right; throwing here would escape advanceRun.
         const role = wiring.routing.routing.roles[task.task_category]
@@ -155,6 +176,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
         // separators, and the parent link already expresses the relationship.
         const worktree = await createWorkerWorktree(orca, {
           parentSelector: `id:${parent}`,
+          repoSelector: `id:${parent.split('::')[0]}`,
           name: `${ctx.branch.replace(/\//g, '-')}-${task.id}`,
         });
 

@@ -14,7 +14,7 @@ export function ollamaTransport(baseUrl = process.env['OLLAMA_BASE_URL'] ?? 'htt
     name: 'ollama-http',
 
     supports(alias: ModelAlias): boolean {
-      return alias.provider === 'ollama';
+      return alias.provider === 'ollama' || alias.provider === 'ollama_local';
     },
 
     async complete({ alias, system, user, timeoutMs }) {

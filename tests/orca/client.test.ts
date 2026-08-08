@@ -139,7 +139,8 @@ describe('worktree creation', () => {
     const { calls, client } = fakeCli(envelope({ id: 'wt2', path: 'H:/wt2' }));
     await createWorkerWorktree(client, {
       parentSelector: 'id:wt1',
-      name: 'ai/UNI-2/api',
+      repoSelector: 'id:repo1',
+      name: 'ai-UNI-2-api',
       agent: 'Ollama DeepSeek V4',
     });
 

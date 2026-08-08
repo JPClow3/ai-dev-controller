@@ -61,13 +61,33 @@ export function createOrcaClient(options: OrcaClientOptions = {}) {
     try {
       ({ stdout } = await run(bin, withJson, timeoutMs));
     } catch (err) {
-      const e = err as { exitCode?: number; stderr?: string; message?: string; code?: string };
-      const stderr = e.stderr ?? e.message ?? '';
+      const e = err as {
+        exitCode?: number;
+        stderr?: string;
+        stdout?: string;
+        message?: string;
+        code?: string;
+      };
       if (e.code === 'ENOENT') {
         throw new Error(`Orca CLI not found at "${bin}". Set ORCA_BIN or add it to PATH.`);
       }
-      if (/not reachable|runtime|ECONNREFUSED/i.test(stderr)) throw new OrcaNotRunningError();
-      throw new OrcaCommandError(withJson, e.exitCode, stderr);
+
+      // Orca puts the reason in STDOUT as {"ok":false,"error":{...}} even when
+      // it exits non-zero, and leaves stderr empty. Reporting only stderr gave
+      // "failed (exit 1): " with no cause, which is undebuggable.
+      let detail = e.stderr?.trim() ?? '';
+      try {
+        const envelope = JSON.parse(e.stdout ?? '') as OrcaEnvelope<unknown>;
+        if (envelope?.error?.message) {
+          detail = `${envelope.error.code ? `${envelope.error.code}: ` : ''}${envelope.error.message}`;
+        }
+      } catch {
+        if (!detail && e.stdout) detail = e.stdout.trim().slice(0, 400);
+      }
+      if (!detail) detail = e.message ?? 'no error output';
+
+      if (/not reachable|runtime|ECONNREFUSED/i.test(detail)) throw new OrcaNotRunningError();
+      throw new OrcaCommandError(withJson, e.exitCode, detail);
     }
 
     let envelope: OrcaEnvelope<T>;

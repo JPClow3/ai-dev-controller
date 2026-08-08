@@ -85,6 +85,12 @@ export function unwrapWorktree(result: unknown): OrcaWorktree {
 export interface WorkerWorktreeInput {
   parentSelector: string;
   name: string;
+  /**
+   * Required even with `--parent-worktree`. Orca answers
+   * "Missing repo selector. Pass --repo or run from inside an Orca-managed
+   * worktree." otherwise — the parent link alone is not enough.
+   */
+  repoSelector: string;
   agent?: string;
   prompt?: string;
 }
@@ -105,6 +111,8 @@ export async function createWorkerWorktree(
     'create',
     '--name',
     input.name,
+    '--repo',
+    input.repoSelector,
     '--parent-worktree',
     input.parentSelector,
   ];

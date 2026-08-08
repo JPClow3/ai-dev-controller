@@ -65,7 +65,19 @@ aliases:
   local_smoke:
     family: glm
     harness: ollama-http
-    provider: ollama
+    provider: ollama_local
+    profile: ollama-local
+    model: qwen2.5-coder:7b
+    context_window: 32768
+    usage_class: low
+
+  # Locally pulled model usable as a real worker through the Codex harness.
+  # Not referenced by any role, so it is never routed automatically - select it
+  # explicitly with AI_DEV_FORCE_ALIAS for a pilot on a known model.
+  local_worker:
+    family: glm
+    harness: codex
+    provider: ollama_local
     profile: ollama-local
     model: qwen2.5-coder:7b
     context_window: 32768

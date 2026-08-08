@@ -71,8 +71,26 @@ export function buildController(options: WiringOptions) {
     log.warn(`provider "${provider}" disabled by AI_DEV_DISABLED_PROVIDERS; routing will not select it`);
   }
 
+  // Pin every role to one alias. A pilot needs a known, reachable model rather
+  // than whatever routing picks; without this, one unavailable challenger can
+  // fail a run for reasons unrelated to what is being tested.
+  const forced = process.env['AI_DEV_FORCE_ALIAS'];
+  if (forced && !config.routing.aliases[forced]) {
+    throw new Error(`AI_DEV_FORCE_ALIAS="${forced}" is not a declared alias`);
+  }
+  if (forced) log.warn(`AI_DEV_FORCE_ALIAS=${forced}: every role will use this alias`);
+
+  const routingConfig = forced
+    ? {
+        ...config.routing,
+        roles: Object.fromEntries(
+          Object.entries(config.routing.roles).map(([role]) => [role, { champion: forced, challengers: [] }]),
+        ),
+      }
+    : config.routing;
+
   const routing = {
-    routing: config.routing,
+    routing: routingConfig,
     scoring: config.scoring,
     pressure,
     stats: (projectId: string, role: string, alias: string) => repos.aliasStats(projectId, role, alias),
