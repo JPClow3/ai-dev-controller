@@ -197,18 +197,14 @@ describe('worker launch needs no GUI-registered agent', () => {
   });
 
   /**
-   * The first live worker finished its edits and then could not record them:
-   * a linked worktree's `.git` is a file pointing outside the sandbox root, so
-   * `git commit` died on "Unable to create .../index.lock: Permission denied"
-   * and the run reached INTEGRATING with nothing to integrate.
+   * Granting the git directory did let the worker commit, and on Windows it
+   * also pushed codex onto an elevated sandbox helper that cannot run
+   * unattended (ERROR_CANCELLED 1223 from an unanswerable UAC prompt). The
+   * controller commits instead, so the worker needs no widening at all.
    */
-  it('grants the shared git directory so the worker can commit', () => {
-    const script = workerScript('x', CONTROL, { gitCommonDir: 'H:/Code/Repo/.git' });
-    expect(script).toContain("--add-dir 'H:/Code/Repo/.git'");
-  });
-
-  it('widens nothing when no git directory is supplied', () => {
+  it('widens the sandbox for nothing', () => {
     expect(workerScript('x', CONTROL)).not.toContain('--add-dir');
+    expect(workerScript('x', CONTROL, { setupCommand: 'npm ci' })).not.toContain('--add-dir');
   });
 
   it('treats a missing sentinel as still running, never as success', () => {
