@@ -112,7 +112,10 @@ export function assertTransitionAllowed(
     return;
   }
 
-  if (from === 'LOCAL_VALIDATION') {
+  // The CI-mode rule governs FORWARD progress only. Remediation is a failure
+  // path and must stay reachable from local validation regardless of how this
+  // repository triggers CI.
+  if (from === 'LOCAL_VALIDATION' && to !== 'REMEDIATING') {
     if (!evidence.ciTrigger) {
       throw new InvalidTransitionError(from, to, 'leaving LOCAL_VALIDATION requires the repository ciTrigger');
     }

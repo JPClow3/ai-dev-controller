@@ -35,6 +35,29 @@ export function assertNotBaseBranch(branch: string, baseBranch: string): void {
   }
 }
 
+/**
+ * Allow-list rather than deny-list: the branch must be one the controller
+ * created.
+ *
+ * This carries more weight than it looks. GitHub branch protection cannot be
+ * relied on here — six of the nine repositories are private on a free plan
+ * (protection unavailable), and the controller authenticates as the repository
+ * admin, who bypasses protection anyway. So this guard is in practice the only
+ * barrier, and "not the base branch" is too weak a test: a typo producing an
+ * empty or unexpected branch name would sail through it.
+ */
+export function assertControllerBranch(branch: string, prefix: string, baseBranch: string): void {
+  assertNotBaseBranch(branch, baseBranch);
+  if (!prefix || !branch.startsWith(prefix)) {
+    throw new ForbiddenGitOperation(
+      `push to "${branch}", which is not a controller branch (expected prefix "${prefix}")`,
+    );
+  }
+  if (branch.includes('..') || branch.includes(' ') || branch.endsWith('/')) {
+    throw new ForbiddenGitOperation(`push to malformed branch name "${branch}"`);
+  }
+}
+
 export function createGit(git: GitRunner = realGit) {
   return {
     /**
@@ -99,10 +122,21 @@ export function createGit(git: GitRunner = realGit) {
       });
     },
 
-    /** Pushes an ai/* branch. Refuses anything resembling a base branch. */
-    async pushBranch(repoPath: string, branch: string, baseBranch: string): Promise<void> {
-      assertNotBaseBranch(branch, baseBranch);
-      await git(repoPath, ['push', '--set-upstream', 'origin', branch]);
+    /**
+     * Pushes a controller branch.
+     *
+     * The refspec is fully qualified (`branch:refs/heads/branch`) so no local
+     * refspec configuration or ambiguous ref can redirect the push somewhere
+     * else.
+     */
+    async pushBranch(
+      repoPath: string,
+      branch: string,
+      baseBranch: string,
+      prefix = 'ai/',
+    ): Promise<void> {
+      assertControllerBranch(branch, prefix, baseBranch);
+      await git(repoPath, ['push', '--set-upstream', 'origin', `${branch}:refs/heads/${branch}`]);
     },
 
     /** Present so the boundary is explicit and greppable. */

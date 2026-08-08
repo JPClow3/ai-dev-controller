@@ -78,13 +78,17 @@ export const MAINLINE_TRANSITIONS: Readonly<Record<WorkflowState, readonly Workf
   QUEUED: ['DEPENDENCY_BLOCKED', 'PLANNING'],
   DEPENDENCY_BLOCKED: ['QUEUED'],
   PLANNING: ['IMPLEMENTING'],
-  IMPLEMENTING: ['INTEGRATING'],
-  INTEGRATING: ['LOCAL_VALIDATION'],
+  // Every stage that can produce a failure must be able to reach REMEDIATING.
+  // Without these edges an interrupted worker, a cherry-pick conflict, a red
+  // test run or a failed CI check has nowhere legal to go, and the run stalls
+  // in place looking like it is merely waiting.
+  IMPLEMENTING: ['INTEGRATING', 'REMEDIATING'],
+  INTEGRATING: ['LOCAL_VALIDATION', 'REMEDIATING'],
   // branch_push -> CI directly; pull_request -> open the draft PR first;
   // none -> skip CI entirely, local validation is the authority.
-  LOCAL_VALIDATION: ['CI', 'PR_DRAFT_OPEN', 'FINAL_REVIEW'],
-  PR_DRAFT_OPEN: ['CI'],
-  CI: ['FINAL_REVIEW'],
+  LOCAL_VALIDATION: ['CI', 'PR_DRAFT_OPEN', 'FINAL_REVIEW', 'REMEDIATING'],
+  PR_DRAFT_OPEN: ['CI', 'REMEDIATING'],
+  CI: ['FINAL_REVIEW', 'REMEDIATING'],
   FINAL_REVIEW: ['REMEDIATING', 'PR_READY'],
   REMEDIATING: ['IMPLEMENTING', 'INTEGRATING', 'LOCAL_VALIDATION', 'CI', 'FINAL_REVIEW'],
   PR_READY: ['PR_OPEN'],
