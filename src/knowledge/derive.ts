@@ -11,6 +11,14 @@ import type { ValidationCommand } from '../validation/result.js';
  */
 export interface DerivedProject {
   baseBranch: string;
+  /**
+   * How to prepare a fresh checkout before validating it.
+   *
+   * Orca worktrees have no `node_modules` and no virtualenv, so omitting this
+   * makes every validation command fail for a reason that has nothing to do
+   * with the change under test.
+   */
+  setup: ValidationCommand | null;
   commands: ValidationCommand[];
   riskPaths: string[];
   packageManager: 'npm' | 'pnpm' | 'yarn' | 'pip' | 'unknown';
@@ -38,6 +46,7 @@ const RISK_PATTERNS = [
 export function deriveProject(repoPath: string, baseBranch: string): DerivedProject {
   const notes: string[] = [];
   const commands: ValidationCommand[] = [];
+  let setup: ValidationCommand | null = null;
   let packageManager: DerivedProject['packageManager'] = 'unknown';
 
   const pkgPath = join(repoPath, 'package.json');
@@ -45,6 +54,16 @@ export function deriveProject(repoPath: string, baseBranch: string): DerivedProj
     packageManager = detectNodePackageManager(repoPath);
     const scripts = readScripts(pkgPath);
     const runner = `${packageManager} run`;
+
+    // A locked install, matching what CI does. `npm install` would silently
+    // resolve a different tree than the one the checks run against.
+    const locked: Record<string, string> = {
+      npm: 'npm ci',
+      pnpm: 'pnpm install --frozen-lockfile',
+      yarn: 'yarn install --immutable',
+    };
+    const install = locked[packageManager];
+    if (install) setup = { name: 'setup', command: install, required: true };
 
     for (const spec of SCRIPT_PREFERENCE) {
       const found = spec.candidates.find((c) => scripts.includes(c));
@@ -72,7 +91,11 @@ export function deriveProject(repoPath: string, baseBranch: string): DerivedProj
 
   const riskPaths = RISK_PATTERNS.filter((glob) => existsSync(join(repoPath, glob.replace(/\/\*\*$/, ''))));
 
-  return { baseBranch, commands, riskPaths, packageManager, notes };
+  if (!setup) {
+    notes.push('No dependency install command derived. A fresh worktree may not be able to run validation.');
+  }
+
+  return { baseBranch, setup, commands, riskPaths, packageManager, notes };
 }
 
 function readScripts(pkgPath: string): string[] {
@@ -180,6 +203,15 @@ export function renderProjectYaml(id: string, derived: DerivedProject): string {
     `base_branch: ${derived.baseBranch}`,
     '',
     'validation:',
+    ...(derived.setup
+      ? [
+          '  # A fresh Orca worktree is a new checkout. Without this, every',
+          '  # command below fails for reasons unrelated to the change.',
+          '  setup:',
+          `    command: ${derived.setup.command}`,
+          '    required: true',
+        ]
+      : []),
     '  commands:',
   ];
 

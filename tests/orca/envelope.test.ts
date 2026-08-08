@@ -181,6 +181,21 @@ describe('worker launch needs no GUI-registered agent', () => {
     );
   });
 
+  /**
+   * The first live worker refused to run tests and said why: "node_modules is
+   * absent, so the focused script cannot find Vitest (and installing
+   * dependencies would modify paths outside my ownership)". Both halves were
+   * correct, so the controller prepares the worktree instead.
+   */
+  it('runs the repository setup before the agent, when one is declared', () => {
+    const script = workerScript('x', CONTROL, 'npm ci');
+    expect(script.indexOf('npm ci')).toBeLessThan(script.indexOf('codex exec'));
+  });
+
+  it('omits setup entirely when the repository declares none', () => {
+    expect(workerScript('x', CONTROL)).not.toContain('ai-dev worker: ');
+  });
+
   it('treats a missing sentinel as still running, never as success', () => {
     expect(readWorkerExit(null)).toBeNull();
     expect(readWorkerExit('0')).toBe(0);

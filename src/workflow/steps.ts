@@ -22,7 +22,7 @@ import { createWorkerWorktree, worktreePathFromId } from '../orca/worktrees.js';
 import { ensureDraftPullRequest, updatePullRequestBody, findPullRequestByBranch } from '../github/pull-requests.js';
 import { readChecks } from '../github/checks.js';
 import { renderPrBody, renderStubPrBody } from '../github/pr-body.js';
-import { readValidationCommands, runRequiredValidation } from '../validation/local.js';
+import { readValidationCommands, readSetupCommand, runRequiredValidation } from '../validation/local.js';
 import { buildFinalReviewPacket, renderPacket } from '../reviews/packet.js';
 import { toPrComments, type ReviewResult } from '../reviews/review.js';
 import { authorshipByFamily } from '../routing/selector.js';
@@ -149,7 +149,12 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     const controlDir = workerControlDir(ctx, task.id);
     mkdirSync(controlDir, { recursive: true });
     writeFileSync(join(controlDir, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
-    writeFileSync(join(controlDir, WORKER_SCRIPT_FILE), workerScript(profile, controlDir), 'utf8');
+    const setup = readSetupCommand(treePath(ctx));
+    writeFileSync(
+      join(controlDir, WORKER_SCRIPT_FILE),
+      workerScript(profile, controlDir, setup?.command),
+      'utf8',
+    );
 
     await launchWorker(orca, {
       worktreeSelector: `id:${worktree.id}`,
@@ -371,7 +376,12 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     },
 
     async runValidation(ctx) {
-      const commands = readValidationCommands(treePath(ctx));
+      // Setup first, and inside the same summary: a fresh worktree has no
+      // installed dependencies, so without it every command fails for a
+      // reason unrelated to the change. Recording it as a result rather than
+      // hiding it means a failed install reads as a failed install.
+      const setup = readSetupCommand(treePath(ctx));
+      const commands = [...(setup ? [setup] : []), ...readValidationCommands(treePath(ctx))];
       const summary = await runRequiredValidation(treePath(ctx), commands);
       // Stored so the PR body reports the run that actually gated the
       // transition, rather than a second execution whose results may differ.
@@ -529,6 +539,9 @@ function workerPrompt(ctx: StepContext, task: PlanTask): string {
     ...task.acceptance_criteria.map((c) => `- ${c}`),
     '',
     '## Finishing',
+    "This worktree's dependencies were installed for you before you started,",
+    'so you can and should run the relevant tests before committing.',
+    '',
     'Commit your work on the branch this worktree already has checked out:',
     '',
     '    git add <the files you own>',
