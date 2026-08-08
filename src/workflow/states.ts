@@ -15,6 +15,7 @@ export const WORKFLOW_STATES = [
   'IMPLEMENTING',
   'INTEGRATING',
   'LOCAL_VALIDATION',
+  'PR_DRAFT_OPEN',
   'CI',
   'FINAL_REVIEW',
   'REMEDIATING',
@@ -29,11 +30,24 @@ export const WORKFLOW_STATES = [
 
 export type WorkflowState = (typeof WORKFLOW_STATES)[number];
 
+/**
+ * How a repository's CI is actually triggered. Measured, not assumed.
+ *
+ *   pull_request  workflows fire on `pull_request` (or only on push to the
+ *                 base branch). Pushing `ai/...` triggers nothing, so the
+ *                 draft PR must open FIRST, purely as the CI trigger.
+ *   branch_push   workflows fire on a push to any branch, so CI can run
+ *                 before a PR exists.
+ *   none          the repository has no CI. Local validation becomes the
+ *                 authority — a deliberate, visible relaxation.
+ */
+export const CI_TRIGGERS = ['pull_request', 'branch_push', 'none'] as const;
+export type CiTrigger = (typeof CI_TRIGGERS)[number];
+
 /** Terminal states release the issue's active-run claim. */
 export const TERMINAL_STATES = ['MERGED', 'FAILED', 'CANCELLED'] as const satisfies readonly WorkflowState[];
 export type TerminalState = (typeof TERMINAL_STATES)[number];
 
-/** Reachable from any active state when evidence carries a machine-readable reason. */
 export const EXCEPTIONAL_STATES = [
   'NEEDS_CONTEXT',
   'BLOCKED_HUMAN',
@@ -49,7 +63,14 @@ export function isExceptional(state: WorkflowState): boolean {
   return (EXCEPTIONAL_STATES as readonly WorkflowState[]).includes(state);
 }
 
-/** Mainline progression. Exceptional states are added on top by the guard. */
+/**
+ * Mainline progression.
+ *
+ * `LOCAL_VALIDATION` has two successors because the CI trigger differs by
+ * repository. `PR_DRAFT_OPEN` exists only to make CI run; the PR at that point
+ * is a stub and Linear still shows `ai-running`. It is not the finished
+ * deliverable — that is `PR_OPEN`.
+ */
 export const MAINLINE_TRANSITIONS: Readonly<Record<WorkflowState, readonly WorkflowState[]>> = {
   DISCOVERED: ['CURATING'],
   CURATING: ['WAITING_READY'],
@@ -59,19 +80,33 @@ export const MAINLINE_TRANSITIONS: Readonly<Record<WorkflowState, readonly Workf
   PLANNING: ['IMPLEMENTING'],
   IMPLEMENTING: ['INTEGRATING'],
   INTEGRATING: ['LOCAL_VALIDATION'],
-  LOCAL_VALIDATION: ['CI'],
+  // branch_push -> CI directly; pull_request -> open the draft PR first;
+  // none -> skip CI entirely, local validation is the authority.
+  LOCAL_VALIDATION: ['CI', 'PR_DRAFT_OPEN', 'FINAL_REVIEW'],
+  PR_DRAFT_OPEN: ['CI'],
   CI: ['FINAL_REVIEW'],
   FINAL_REVIEW: ['REMEDIATING', 'PR_READY'],
   REMEDIATING: ['IMPLEMENTING', 'INTEGRATING', 'LOCAL_VALIDATION', 'CI', 'FINAL_REVIEW'],
   PR_READY: ['PR_OPEN'],
   PR_OPEN: ['MERGED'],
   MERGED: [],
-  // Recovery paths back into the mainline after a human intervenes.
   NEEDS_CONTEXT: ['CURATING', 'WAITING_READY'],
   BLOCKED_HUMAN: ['QUEUED', 'PLANNING', 'IMPLEMENTING', 'REMEDIATING'],
   FAILED: ['QUEUED'],
   CANCELLED: [],
 };
+
+/** The legal successor of LOCAL_VALIDATION for a given repository. */
+export function nextAfterLocalValidation(trigger: CiTrigger): WorkflowState {
+  switch (trigger) {
+    case 'pull_request':
+      return 'PR_DRAFT_OPEN';
+    case 'branch_push':
+      return 'CI';
+    case 'none':
+      return 'FINAL_REVIEW';
+  }
+}
 
 export const AI_LIFECYCLE_LABELS = [
   'ai-curate',
@@ -85,8 +120,11 @@ export const AI_LIFECYCLE_LABELS = [
 export type AiLifecycleLabel = (typeof AI_LIFECYCLE_LABELS)[number];
 
 /**
- * What Linear is allowed to see. Several internal states collapse onto one
- * label on purpose.
+ * What Linear is allowed to see.
+ *
+ * `PR_DRAFT_OPEN` maps to `ai-running`, not `ai-pr-open`: that PR is scaffolding
+ * for CI, and telling you a PR is ready when it has not been reviewed would be
+ * the exact false signal this system exists to avoid.
  *
  * `ai-ready` is absent: it is a human input, never a controller output.
  */
@@ -100,6 +138,7 @@ export const LINEAR_PROJECTION: Readonly<Record<WorkflowState, AiLifecycleLabel 
   IMPLEMENTING: 'ai-running',
   INTEGRATING: 'ai-running',
   LOCAL_VALIDATION: 'ai-running',
+  PR_DRAFT_OPEN: 'ai-running',
   REMEDIATING: 'ai-running',
   CI: 'ai-reviewing',
   FINAL_REVIEW: 'ai-reviewing',

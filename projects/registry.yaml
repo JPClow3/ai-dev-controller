@@ -2,14 +2,22 @@
 #
 # Repository-owned specifics (validation commands, risk paths, knowledge map)
 # live in each repository's .ai-workflow/project.yaml, not here. This file only
-# answers "which repository does this Linear issue belong to, and where is it".
+# answers "which repository does this Linear issue belong to, where is it, and
+# how does its CI actually fire".
 #
-# `base_branch` was read from each repository's actual origin/HEAD, not assumed.
+# `base_branch` was read from each repository's real origin/HEAD, not assumed.
 # Inova and hefesto are on `master`.
 #
+# `ci.trigger` was read from each repository's .github/workflows `on:` blocks:
+#   pull_request  a pushed ai/* branch triggers NOTHING. The draft PR must open
+#                 first, purely so CI has something to run against.
+#   branch_push   CI runs on any branch push; a PR is not needed to get checks.
+#   none          no workflows at all. Local validation becomes the authority.
+#
+# `required_checks` empty means "whatever GitHub reports as required".
+#
 # Each Linear project maps to exactly one repository, so no `groups` are needed
-# and resolution succeeds via `sole_project`. Add a group only when one Linear
-# project spans several repositories.
+# and resolution succeeds via `sole_project`.
 
 projects:
   unirv-monolith:
@@ -26,6 +34,9 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
 
   lorebound:
     enabled: true
@@ -41,6 +52,9 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
 
   moto-track:
     enabled: true
@@ -56,6 +70,9 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
 
   portfolio:
     enabled: true
@@ -71,6 +88,9 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
 
   # Default branch is master, not main.
   inova:
@@ -87,6 +107,9 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
 
   fatec-web:
     enabled: true
@@ -102,6 +125,9 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
 
   throughline:
     enabled: true
@@ -117,6 +143,9 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
 
   # Python data/model pipeline. Default branch is master, not main.
   # Distinct repository from hefesto-site.
@@ -134,7 +163,14 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
 
+  # No GitHub Actions workflows at all. With trigger `none` the controller
+  # treats local validation as the authority, which is weaker than every other
+  # repository here. Disable it, or add a CI workflow, before trusting
+  # autonomous PRs from this one.
   hefesto-site:
     enabled: true
     repository:
@@ -149,5 +185,8 @@ projects:
     routing_profile: default
     validation:
       source: repository
+    ci:
+      trigger: none
+      required_checks: []
 
 groups: {}

@@ -66,18 +66,25 @@ describe('claimIssueRun', () => {
 
   it('does not treat a merged run as blocking a new claim', () => {
     const run = repos.claimIssueRun('UNI-142', 'climagro-django')!;
+    // Full happy path for a pull_request repository: the draft PR opens before
+    // CI, because a pushed ai/* branch triggers no workflow.
     for (const [to, facts] of [
       ['PLANNING', proven('dependenciesMerged', 'capacityAvailable', 'freshBaseFetched')],
       ['IMPLEMENTING', proven('planValidated', 'ownershipSetsDisjoint', 'worktreesCreated')],
       ['INTEGRATING', proven('allTasksTerminal')],
       ['LOCAL_VALIDATION', proven('integrationCommitPresent')],
-      ['CI', proven('branchPushed')],
+      ['PR_DRAFT_OPEN', proven('branchPushed')],
+      ['CI', proven('branchPushed', 'pullRequestExists')],
       ['FINAL_REVIEW', proven('requiredCiPassed')],
       ['PR_READY', proven('requiredCiPassed', 'noBlockingFindings', 'retryBudgetRemaining')],
-      ['PR_OPEN', proven('pullRequestIsDraft')],
+      ['PR_OPEN', proven('pullRequestIsDraft', 'provenanceBodyWritten')],
       ['MERGED', proven('mergedByHuman')],
     ] as const) {
-      repos.transitionRun(run.id, to as never, { reason: 'advance', mechanicalFacts: facts });
+      repos.transitionRun(run.id, to as never, {
+        reason: 'advance',
+        ciTrigger: 'pull_request',
+        mechanicalFacts: facts,
+      });
     }
     expect(repos.getActiveRun('UNI-142')).toBeNull();
     expect(repos.claimIssueRun('UNI-142', 'climagro-django')).not.toBeNull();

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CI_TRIGGERS } from '../workflow/states.js';
 
 const projectEntrySchema = z
   .object({
@@ -20,6 +21,15 @@ const projectEntrySchema = z
     concurrency: z.object({ max_agents: z.number().int().positive() }).optional(),
     routing_profile: z.string().default('default'),
     validation: z.object({ source: z.literal('repository') }).default({ source: 'repository' }),
+    // How this repository's CI is actually triggered. Defaults to
+    // `pull_request` because that is the common GitHub Actions shape: a
+    // workflow with `on: pull_request` does not fire for a pushed ai/* branch.
+    ci: z
+      .object({
+        trigger: z.enum(CI_TRIGGERS).default('pull_request'),
+        required_checks: z.array(z.string()).default([]),
+      })
+      .default({ trigger: 'pull_request', required_checks: [] }),
   })
   .transform((p) => ({
     enabled: p.enabled,
@@ -33,6 +43,7 @@ const projectEntrySchema = z
     maxAgents: p.concurrency?.max_agents,
     routingProfile: p.routing_profile,
     validationSource: p.validation.source,
+    ci: { trigger: p.ci.trigger, requiredChecks: p.ci.required_checks },
   }));
 
 const groupSchema = z
