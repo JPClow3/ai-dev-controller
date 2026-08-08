@@ -96,10 +96,23 @@ export async function dispatchNewIssue(
   // 1. Refuse duplicates before touching anything.
   const existing = await findExistingWorkspace(deps, input.issueId, branch, input.slug, repoPath);
   if (hasExistingWork(existing)) {
+    // Adopt, but still claim and record. Returning here without claiming left
+    // the issue permanently stuck: prior work existed, no run owned it, and
+    // nothing ever picked it up again.
     log.info(`${input.issueId}: existing work found, adopting rather than recreating`);
+    const adopted = deps.repos.getActiveRun(input.issueId) ?? deps.repos.claimIssueRun(input.issueId, input.projectId);
+    if (adopted) {
+      const baseSha = await deps.git.fetchFreshBase(repoPath, baseBranch).catch(() => '');
+      deps.repos.attachRunWorkspace(adopted.id, {
+        branch,
+        ...(baseSha ? { baseSha } : {}),
+        ...(existing.orcaWorktree ? { orcaWorktreeId: existing.orcaWorktree.id } : {}),
+      });
+    }
     return {
       issueId: input.issueId,
       action: 'adopted',
+      ...(adopted ? { runId: adopted.id } : {}),
       branch,
       ...(existing.orcaWorktree ? { worktreeId: existing.orcaWorktree.id } : {}),
       reason: describeExisting(existing),

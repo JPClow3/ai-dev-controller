@@ -151,9 +151,11 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
         // No `--agent`: custom agents can only be registered through the Orca
         // GUI, which would make this un-runnable from a script. The worker is
         // launched as a plain command instead.
+        // Flat name: Orca rejects a worktree name carrying the parent's path
+        // separators, and the parent link already expresses the relationship.
         const worktree = await createWorkerWorktree(orca, {
           parentSelector: `id:${parent}`,
-          name: `${ctx.branch}/${task.id}`,
+          name: `${ctx.branch.replace(/\//g, '-')}-${task.id}`,
         });
 
         const profile = config.routing.aliases[decision.alias]?.profile;

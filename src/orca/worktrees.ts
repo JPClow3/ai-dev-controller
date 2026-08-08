@@ -64,7 +64,22 @@ export async function createParentWorktree(
   if (input.agent) args.push('--agent', input.agent);
   if (input.prompt) args.push('--prompt', input.prompt);
 
-  return client.json<OrcaWorktree>(args);
+  return unwrapWorktree(await client.json(args));
+}
+
+/**
+ * Orca wraps a single object under a named key: `result.worktree`, not the
+ * worktree itself. Reading `.id` off the wrapper yields undefined, which then
+ * gets stored as a null worktree id and surfaces much later as "run has no
+ * parent worktree".
+ */
+export function unwrapWorktree(result: unknown): OrcaWorktree {
+  const wrapped = (result as { worktree?: OrcaWorktree })?.worktree;
+  const worktree = wrapped ?? (result as OrcaWorktree);
+  if (!worktree?.id) {
+    throw new Error(`Orca returned no worktree id: ${JSON.stringify(result).slice(0, 200)}`);
+  }
+  return worktree;
 }
 
 export interface WorkerWorktreeInput {
@@ -95,7 +110,7 @@ export async function createWorkerWorktree(
   ];
   if (input.agent) args.push('--agent', input.agent);
   if (input.prompt) args.push('--prompt', input.prompt);
-  return client.json<OrcaWorktree>(args);
+  return unwrapWorktree(await client.json(args));
 }
 
 export async function removeWorktree(client: OrcaClient, selector: string, force = false): Promise<void> {

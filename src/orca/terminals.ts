@@ -15,6 +15,19 @@ export async function listTerminals(client: OrcaClient, worktreeSelector?: strin
   return result.terminals ?? [];
 }
 
+/**
+ * Orca wraps a single object under a named key: `result.terminal`. Reading
+ * `.handle` off the wrapper silently yields undefined.
+ */
+export function unwrapTerminal(result: unknown): OrcaTerminal {
+  const wrapped = (result as { terminal?: OrcaTerminal })?.terminal;
+  const terminal = wrapped ?? (result as OrcaTerminal);
+  if (!terminal?.handle) {
+    throw new Error(`Orca returned no terminal handle: ${JSON.stringify(result).slice(0, 200)}`);
+  }
+  return terminal;
+}
+
 export async function createTerminal(
   client: OrcaClient,
   input: { worktreeSelector: string; command: string; title?: string },
@@ -124,14 +137,16 @@ export async function launchWorker(
   client: OrcaClient,
   input: { worktreeSelector: string; profile: string; title: string },
 ): Promise<OrcaTerminal> {
-  return client.json<OrcaTerminal>([
-    'terminal',
-    'create',
-    '--worktree',
-    input.worktreeSelector,
-    '--command',
-    workerCommand(input.profile),
-    '--title',
-    input.title,
-  ]);
+  return unwrapTerminal(
+    await client.json([
+      'terminal',
+      'create',
+      '--worktree',
+      input.worktreeSelector,
+      '--command',
+      workerCommand(input.profile),
+      '--title',
+      input.title,
+    ]),
+  );
 }
