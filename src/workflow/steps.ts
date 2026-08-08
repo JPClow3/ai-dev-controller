@@ -96,6 +96,35 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     return project(ctx).repository.github;
   }
 
+  /**
+   * Where this run's validation contract actually is.
+   *
+   * `.ai-workflow/project.yaml` is meant to be committed, by the bootstrap PR,
+   * so it travels with the branch and a run on an old base is validated by the
+   * rules of that base. Until that PR merges the file exists only in the
+   * registry clone's working tree, and a fresh worktree checkout has none —
+   * which silently produced a run with no setup command and no validation
+   * commands at all, and a pull request whose body honestly reported that the
+   * repository declared none.
+   *
+   * Falling back to the clone keeps the soft knowledge gate usable. Saying so
+   * out loud every time keeps it from becoming the permanent arrangement.
+   */
+  function contractPath(ctx: StepContext): string {
+    const tree = treePath(ctx);
+    if (existsSync(join(tree, '.ai-workflow/project.yaml'))) return tree;
+
+    const clone = repoPath(ctx);
+    if (existsSync(join(clone, '.ai-workflow/project.yaml'))) {
+      log.warn(
+        `${ctx.run.issueId}: .ai-workflow/project.yaml is not committed; ` +
+          `reading the validation contract from ${clone}. Merge the bootstrap PR so it travels with the branch.`,
+      );
+      return clone;
+    }
+    return tree;
+  }
+
   /** Controller-owned scratch for one worker, deliberately not in the repo. */
   function workerControlDir(ctx: StepContext, taskKey: string): string {
     return resolve(config.rootDir, 'data', 'workers', ctx.run.id, taskKey);
@@ -149,7 +178,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     const controlDir = workerControlDir(ctx, task.id);
     mkdirSync(controlDir, { recursive: true });
     writeFileSync(join(controlDir, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
-    const setup = readSetupCommand(treePath(ctx));
+    const setup = readSetupCommand(contractPath(ctx));
     writeFileSync(
       join(controlDir, WORKER_SCRIPT_FILE),
       workerScript(profile, controlDir, {
@@ -318,7 +347,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
           readIfPresent(treePath(ctx), 'AGENTS.md'),
           '',
           '## Validation commands available',
-          readValidationCommands(treePath(ctx))
+          readValidationCommands(contractPath(ctx))
             .map((c) => `- ${c.name}: ${c.command}${c.required ? ' (required)' : ''}`)
             .join('\n') || '- none declared',
           '',
@@ -454,8 +483,8 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       // installed dependencies, so without it every command fails for a
       // reason unrelated to the change. Recording it as a result rather than
       // hiding it means a failed install reads as a failed install.
-      const setup = readSetupCommand(treePath(ctx));
-      const commands = [...(setup ? [setup] : []), ...readValidationCommands(treePath(ctx))];
+      const setup = readSetupCommand(contractPath(ctx));
+      const commands = [...(setup ? [setup] : []), ...readValidationCommands(contractPath(ctx))];
       const summary = await runRequiredValidation(treePath(ctx), commands);
       // Stored so the PR body reports the run that actually gated the
       // transition, rather than a second execution whose results may differ.
