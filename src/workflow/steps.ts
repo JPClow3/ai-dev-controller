@@ -548,8 +548,10 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       ]);
       const reviewed = assessment !== null;
 
+      const issueUrl = repos.issueUrl(ctx.run.issueId);
       const body = renderPrBody({
         issueId: ctx.run.issueId,
+        ...(issueUrl ? { issueUrl } : {}),
         summary: issueContract(ctx).split('\n').slice(0, 3).join(' '),
         criteria: criteria.map((c) => ({
           id: c.id,
