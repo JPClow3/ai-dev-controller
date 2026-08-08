@@ -70,14 +70,21 @@ export async function readChecks(
   const pending = required.filter((c) => PENDING.has(c.state)).map((c) => c.name);
   const failed = required.filter((c) => !PENDING.has(c.state) && !PASSING.has(c.state)).map((c) => c.name);
 
+  // An empty rollup is "not started", not "finished with nothing". GitHub
+  // reports no checks for the first seconds after a PR opens, and calling that
+  // complete-and-not-passed sent the run straight to REMEDIATING with an empty
+  // list of failures — remediating a CI result that did not exist yet.
+  const notStarted = required.length === 0;
+
   return {
     headSha,
-    complete: pending.length === 0,
-    // No checks at all is NOT a pass: it usually means the workflow never
-    // triggered, which is precisely the failure mode PR_DRAFT_OPEN exists for.
-    allRequiredPassed: pending.length === 0 && failed.length === 0 && required.length > 0,
+    complete: !notStarted && pending.length === 0,
+    // No checks at all is NOT a pass either: it can mean the workflow never
+    // triggers on this branch, which is the failure mode PR_DRAFT_OPEN exists
+    // for. Neither passed nor complete leaves the run waiting, visibly.
+    allRequiredPassed: pending.length === 0 && failed.length === 0 && !notStarted,
     checks,
-    pending,
+    pending: notStarted ? ['(no checks reported yet)'] : pending,
     failed,
   };
 }

@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { OrcaClient } from './client.js';
 
 export interface OrcaTerminal {
@@ -108,11 +109,18 @@ export async function launchAgent(
   ]);
 }
 
-/** Where a worker's prompt, final message and exit status live in its worktree. */
-export const WORKER_PROMPT_FILE = '.ai-worker-prompt.txt';
-export const WORKER_RESULT_FILE = '.ai-worker-result.txt';
-export const WORKER_SCRIPT_FILE = '.ai-worker-run.ps1';
-export const WORKER_EXIT_FILE = '.ai-worker-exit.txt';
+/**
+ * Names of a worker's control files.
+ *
+ * These live in a controller-owned directory OUTSIDE the worktree. Written
+ * into the worktree they showed up as untracked files next to the worker's
+ * own changes, one `git add -A` away from being committed into the pull
+ * request — the controller's scratch has no business in the user's diff.
+ */
+export const WORKER_PROMPT_FILE = 'prompt.txt';
+export const WORKER_RESULT_FILE = 'result.txt';
+export const WORKER_SCRIPT_FILE = 'run.ps1';
+export const WORKER_EXIT_FILE = 'exit.txt';
 
 /**
  * The launcher script a worker terminal runs.
@@ -130,30 +138,32 @@ export const WORKER_EXIT_FILE = '.ai-worker-exit.txt';
  *      Orca at all. The script records the exit status itself, which also
  *      survives a controller or Orca restart in a way terminal state does not.
  */
-export function workerScript(profile: string): string {
+export function workerScript(profile: string, controlDir: string): string {
+  const q = (name: string) => `'${join(controlDir, name).replace(/'/g, "''")}'`;
+
   const codex = [
     'codex exec',
     `--profile ${profile}`,
     '--sandbox workspace-write',
     '--skip-git-repo-check',
-    `--output-last-message ${WORKER_RESULT_FILE}`,
+    `--output-last-message ${q(WORKER_RESULT_FILE)}`,
     '-',
   ].join(' ');
 
   return [
     '$ErrorActionPreference = "Continue"',
-    `Get-Content -Raw ${WORKER_PROMPT_FILE} | ${codex}`,
+    `Get-Content -Raw ${q(WORKER_PROMPT_FILE)} | ${codex}`,
     '$code = $LASTEXITCODE',
     'if ($null -eq $code) { $code = 0 }',
-    `Set-Content -Path ${WORKER_EXIT_FILE} -Value $code -Encoding ascii`,
+    `Set-Content -Path ${q(WORKER_EXIT_FILE)} -Value $code -Encoding ascii`,
     'Write-Host "ai-dev worker finished with exit $code"',
     '',
   ].join('\n');
 }
 
 /** The command Orca types into the worker's terminal. */
-export function workerCommand(): string {
-  return `pwsh -NoProfile -ExecutionPolicy Bypass -File ${WORKER_SCRIPT_FILE}`;
+export function workerCommand(controlDir: string): string {
+  return `pwsh -NoProfile -ExecutionPolicy Bypass -File '${join(controlDir, WORKER_SCRIPT_FILE).replace(/'/g, "''")}'`;
 }
 
 /**
@@ -171,7 +181,7 @@ export function readWorkerExit(exitFileContents: string | null): number | null {
 /** Launches a worker from the prompt and script already written into the worktree. */
 export async function launchWorker(
   client: OrcaClient,
-  input: { worktreeSelector: string; title: string },
+  input: { worktreeSelector: string; title: string; controlDir: string },
 ): Promise<OrcaTerminal> {
   return unwrapTerminal(
     await client.json([
@@ -180,7 +190,7 @@ export async function launchWorker(
       '--worktree',
       input.worktreeSelector,
       '--command',
-      workerCommand(),
+      workerCommand(input.controlDir),
       '--title',
       input.title,
     ]),
