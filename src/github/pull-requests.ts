@@ -1,4 +1,5 @@
 import type { GitHub } from './client.js';
+import { controllerBranchIssueId } from '../git/repository.js';
 
 export interface PullRequestRef {
   number: number;
@@ -145,10 +146,9 @@ export async function listRecentlyMerged(gh: GitHub, slug: string, limit = 50): 
  * branches this controller actually pushes.
  */
 export function issueIdFromBranch(branch: string, prefix: string): string | null {
-  const normalised = prefix.endsWith('/') ? prefix : `${prefix}/`;
-  const at = branch.startsWith(normalised) ? 0 : branch.indexOf(`/${normalised}`) + 1;
-  if (at <= 0 && !branch.startsWith(normalised)) return null;
-  const rest = branch.slice(at + normalised.length);
-  const match = /^([A-Z][A-Z0-9]*-\d+)/.exec(rest);
-  return match?.[1] ?? null;
+  // Shared with the push guard on purpose: "is this our branch" and "whose
+  // issue is it" are the same question, and answering them two different ways
+  // is how a merged PR released no blockers while the push that created it
+  // was considered legitimate.
+  return controllerBranchIssueId(branch, prefix);
 }
