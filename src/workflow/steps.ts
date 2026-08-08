@@ -9,8 +9,16 @@ import type { GitHub } from '../github/client.js';
 import type { Git } from '../git/repository.js';
 import { createIntegrator } from '../git/integration.js';
 import type { GitRunner } from '../git/repository.js';
-import { listTerminals, launchWorker, WORKER_PROMPT_FILE } from '../orca/terminals.js';
-import { createWorkerWorktree } from '../orca/worktrees.js';
+import {
+  launchWorker,
+  readWorkerExit,
+  workerScript,
+  WORKER_PROMPT_FILE,
+  WORKER_SCRIPT_FILE,
+  WORKER_EXIT_FILE,
+  WORKER_RESULT_FILE,
+} from '../orca/terminals.js';
+import { createWorkerWorktree, worktreePathFromId } from '../orca/worktrees.js';
 import { ensureDraftPullRequest, updatePullRequestBody, findPullRequestByBranch } from '../github/pull-requests.js';
 import { readChecks } from '../github/checks.js';
 import { renderPrBody, renderStubPrBody } from '../github/pr-body.js';
@@ -18,6 +26,7 @@ import { readValidationCommands, runRequiredValidation } from '../validation/loc
 import { buildFinalReviewPacket, renderPacket } from '../reviews/packet.js';
 import { toPrComments, type ReviewResult } from '../reviews/review.js';
 import { authorshipByFamily } from '../routing/selector.js';
+import { isUsable } from '../routing/pressure.js';
 import { selectModel, type SelectorDeps } from '../routing/selector.js';
 import { postBlockerQuestion } from '../linear/dependencies.js';
 import { setAiLifecycleLabel } from '../linear/labels.js';
@@ -65,8 +74,22 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     return entry;
   }
 
+  /** The registry clone. Only correct before the worktree exists. */
   function repoPath(ctx: StepContext): string {
     return project(ctx).repository.path;
+  }
+
+  /**
+   * Where this run's code actually lives.
+   *
+   * Everything after PLANNING — integration, validation, the review diff, the
+   * push — must run here. `repoPath` has the base branch checked out.
+   */
+  function treePath(ctx: StepContext): string {
+    if (!ctx.worktreePath) {
+      throw new Error(`Run ${ctx.run.id} has no parent worktree path; cannot operate on the base clone`);
+    }
+    return ctx.worktreePath;
   }
 
   function slug(ctx: StepContext): string {
@@ -81,6 +104,83 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
   function issueContract(ctx: StepContext): string {
     const row = repos.getIssueContract(ctx.run.issueId);
     return row ?? `Issue ${ctx.run.issueId} (no curated body recorded)`;
+  }
+
+  /**
+   * Creates a worker's worktree, writes its prompt and launcher, and starts it.
+   *
+   * Shared by the first wave and every later one so a task dispatched second
+   * is dispatched identically to a task dispatched first.
+   */
+  async function dispatchTask(ctx: StepContext, task: PlanTask): Promise<void> {
+    const parent = ctx.run.orcaWorktreeId;
+    if (!parent) throw new Error(`Run ${ctx.run.id} has no parent worktree`);
+
+    // A planner may return a task_category that is not a declared routing
+    // role. Falling back is right; throwing here would escape advanceRun.
+    const role = wiring.routing.routing.roles[task.task_category] ? task.task_category : 'routine_behavior';
+    if (role !== task.task_category) {
+      log.warn(`${ctx.run.issueId}/${task.id}: unknown task_category "${task.task_category}", routing as ${role}`);
+    }
+
+    const decision = selectModel({ projectId: ctx.projectId, role, risk: task.risk ?? 'low' }, wiring.routing);
+    const profile = config.routing.aliases[decision.alias]?.profile;
+    if (!profile) throw new Error(`Alias ${decision.alias} declares no Codex profile`);
+
+    // No `--agent`: custom agents can only be registered through the Orca
+    // GUI, which would make this un-runnable from a script. The worker is
+    // launched as a plain command instead.
+    // Flat name: Orca rejects a worktree name carrying the parent's path
+    // separators, and the parent link already expresses the relationship.
+    const worktree = await createWorkerWorktree(orca, {
+      parentSelector: `id:${parent}`,
+      repoSelector: `id:${parent.split('::')[0]}`,
+      name: `${ctx.branch.replace(/\//g, '-')}-${task.id}`,
+    });
+
+    // Both go to files: the prompt exceeds the Windows argv limit, and the
+    // files survive for inspection after the run.
+    writeFileSync(join(worktree.path, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
+    writeFileSync(join(worktree.path, WORKER_SCRIPT_FILE), workerScript(profile), 'utf8');
+
+    await launchWorker(orca, {
+      worktreeSelector: `id:${worktree.id}`,
+      title: `${ctx.run.issueId}/${task.id}`,
+    });
+
+    repos.recordTasks(ctx.run.id, [
+      { ...task, branch: worktree.branch ?? `${ctx.branch}/${task.id}`, orcaWorktreeId: worktree.id },
+    ]);
+    repos.setTaskState(ctx.run.id, task.id, 'DISPATCHED');
+    repos.recordAttempt(ctx.run.id, task.id, {
+      aliasId: decision.alias,
+      role: 'worker',
+      isChallenger: decision.isChallenger,
+    });
+    log.info(`${ctx.run.issueId}/${task.id}: dispatched to ${decision.alias} (${profile})`);
+  }
+
+  /** Records what a finished worker actually committed on its own branch. */
+  async function harvestCommits(
+    ctx: StepContext,
+    taskKey: string,
+    workerPath: string,
+  ): Promise<Array<{ sha: string; message: string }>> {
+    const baseSha = ctx.run.baseSha;
+    if (!baseSha) return [];
+
+    const commits = await git.commitsSince(workerPath, baseSha).catch((err: unknown) => {
+      log.warn(`${ctx.run.issueId}/${taskKey}: could not read commits`, (err as Error).message);
+      return [] as Array<{ sha: string; message: string }>;
+    });
+
+    // Oldest first, so cherry-picking replays the worker's own order.
+    const ordered = [...commits].reverse();
+    repos.recordAttemptResult(ctx.run.id, taskKey, {
+      commits: ordered,
+      finalMessage: readIfPresent(workerPath, WORKER_RESULT_FILE).slice(0, 4000),
+    });
+    return ordered;
   }
 
   return {
@@ -108,10 +208,10 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
           issueContract(ctx),
           '',
           '## Repository instructions',
-          readIfPresent(repoPath(ctx), 'AGENTS.md'),
+          readIfPresent(treePath(ctx), 'AGENTS.md'),
           '',
           '## Validation commands available',
-          readValidationCommands(repoPath(ctx))
+          readValidationCommands(treePath(ctx))
             .map((c) => `- ${c.name}: ${c.command}${c.required ? ' (required)' : ''}`)
             .join('\n') || '- none declared',
           '',
@@ -126,9 +226,6 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     },
 
     async createWorktrees(ctx, tasks) {
-      const parent = ctx.run.orcaWorktreeId;
-      if (!parent) throw new Error(`Run ${ctx.run.id} has no parent worktree`);
-
       // Persist the decomposition first: integration, reviewer selection and
       // the provenance body all read these rows, and a crash between creating
       // a worktree and recording it would orphan the work.
@@ -142,81 +239,92 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       // away: two workers were observed editing the same file concurrently,
       // which is precisely the corruption the rule exists to prevent.
       const runnable = tasks.filter((t) => (t.blocked_by ?? []).length === 0);
-      const deferred = tasks.filter((t) => (t.blocked_by ?? []).length > 0);
 
       if (runnable.length === 0 && tasks.length > 0) {
         throw new Error(
           `Every task in the plan declares a blocker; the dependency graph has no starting point.`,
         );
       }
-      for (const task of deferred) {
-        log.info(
-          `${ctx.run.issueId}/${task.id}: deferred behind ${(task.blocked_by ?? []).join(', ')}`,
-        );
+      for (const task of tasks.filter((t) => (t.blocked_by ?? []).length > 0)) {
+        log.info(`${ctx.run.issueId}/${task.id}: deferred behind ${(task.blocked_by ?? []).join(', ')}`);
       }
-
-      for (const task of runnable) {
-        // A planner may return a task_category that is not a declared routing
-        // role. Falling back is right; throwing here would escape advanceRun.
-        const role = wiring.routing.routing.roles[task.task_category]
-          ? task.task_category
-          : 'routine_behavior';
-        if (role !== task.task_category) {
-          log.warn(`${ctx.run.issueId}/${task.id}: unknown task_category "${task.task_category}", routing as ${role}`);
-        }
-
-        const decision = selectModel(
-          { projectId: ctx.projectId, role, risk: task.risk ?? 'low' },
-          wiring.routing,
-        );
-        // No `--agent`: custom agents can only be registered through the Orca
-        // GUI, which would make this un-runnable from a script. The worker is
-        // launched as a plain command instead.
-        // Flat name: Orca rejects a worktree name carrying the parent's path
-        // separators, and the parent link already expresses the relationship.
-        const worktree = await createWorkerWorktree(orca, {
-          parentSelector: `id:${parent}`,
-          repoSelector: `id:${parent.split('::')[0]}`,
-          name: `${ctx.branch.replace(/\//g, '-')}-${task.id}`,
-        });
-
-        const profile = config.routing.aliases[decision.alias]?.profile;
-        if (!profile) throw new Error(`Alias ${decision.alias} declares no Codex profile`);
-
-        // The prompt goes to a file: it exceeds the Windows argv limit, and a
-        // file also survives for inspection after the run.
-        writeFileSync(join(worktree.path, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
-        await launchWorker(orca, {
-          worktreeSelector: `id:${worktree.id}`,
-          profile,
-          title: `${ctx.run.issueId}/${task.id}`,
-        });
-
-        repos.recordTasks(ctx.run.id, [
-          { ...task, branch: worktree.branch ?? `${ctx.branch}/${task.id}`, orcaWorktreeId: worktree.id },
-        ]);
-        repos.recordAttempt(ctx.run.id, task.id, {
-          aliasId: decision.alias,
-          role: 'worker',
-          isChallenger: decision.isChallenger,
-        });
-        log.info(`${ctx.run.issueId}/${task.id}: dispatched to ${decision.alias}`);
-      }
+      for (const task of runnable) await dispatchTask(ctx, task);
     },
 
+    /**
+     * Launches the tasks whose blockers have all finished.
+     *
+     * Without this a plan containing any sequential step lost its dependent
+     * half outright: the tasks were recorded, never launched, and the run
+     * integrated only the first wave while reporting success.
+     */
+    async dispatchNextWave(ctx) {
+      const tasks = repos.runTasks(ctx.run.id);
+      const done = new Set(tasks.filter((t) => t.state === 'DONE').map((t) => t.id));
+
+      const ready = tasks.filter(
+        (t) => t.state === 'PENDING' && t.blocked_by.every((b) => done.has(b)),
+      );
+      for (const task of ready) {
+        await dispatchTask(ctx, {
+          id: task.id,
+          summary: task.summary,
+          task_category: task.task_category,
+          owns: task.owns,
+          blocked_by: task.blocked_by,
+          acceptance_criteria: task.acceptance_criteria,
+          ...(task.risk ? { risk: task.risk as NonNullable<PlanTask['risk']> } : {}),
+        });
+      }
+      return ready.length;
+    },
+
+    /**
+     * Whether every dispatched worker has finished.
+     *
+     * Read from each worker's own worktree, not from Orca. Orca terminals are
+     * long-lived shells: `terminal list` reports neither a status nor an exit
+     * code, so the previous check ("no terminal has status running") was
+     * vacuously true on the first tick and every worker was declared settled
+     * the instant it was launched. It also scoped the query to the PARENT
+     * worktree, which never contains worker terminals at all.
+     */
     async workersSettled(ctx) {
-      const terminals = await listTerminals(orca, `id:${ctx.run.orcaWorktreeId}`);
-      const running = terminals.filter((t) => t.status === 'running');
-      // A non-zero exit is an interrupted attempt, not a silent success.
-      const interrupted = terminals
-        .filter((t) => t.status !== 'running' && t.exitCode !== null && t.exitCode !== 0)
-        .map((t) => t.handle);
-      return { allSettled: running.length === 0, interrupted };
+      const tasks = repos.runTasks(ctx.run.id).filter((t) => t.state === 'DISPATCHED');
+      const interrupted: string[] = [];
+      let pending = 0;
+
+      for (const task of tasks) {
+        if (!task.orcaWorktreeId) continue;
+        const path = worktreePathFromId(task.orcaWorktreeId);
+        const exit = readWorkerExit(readIfPresent(path, WORKER_EXIT_FILE) || null);
+
+        if (exit === null) {
+          pending += 1;
+          continue;
+        }
+        if (exit !== 0) {
+          repos.setTaskState(ctx.run.id, task.id, 'FAILED');
+          repos.recordAttemptResult(ctx.run.id, task.id, { exitCode: exit, commits: [] });
+          interrupted.push(task.id);
+          continue;
+        }
+
+        // Harvest before the task is marked done: the commits recorded here
+        // are the only thing integration has to work with, and nothing was
+        // writing them, so every run reached INTEGRATING and reported "no
+        // worker produced any commit".
+        const commits = await harvestCommits(ctx, task.id, path);
+        repos.setTaskState(ctx.run.id, task.id, 'DONE');
+        log.info(`${ctx.run.issueId}/${task.id}: finished with ${commits.length} commit(s)`);
+      }
+
+      return { allSettled: pending === 0, interrupted };
     },
 
     async integrate(ctx) {
       const workers = repos.workerCommits(ctx.run.id);
-      const result = await integrator.integrate(repoPath(ctx), workers);
+      const result = await integrator.integrate(treePath(ctx), workers);
       return {
         conflicts: result.conflicts.flatMap((c) => c.files),
         headSha: result.headSha,
@@ -224,8 +332,8 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     },
 
     async runValidation(ctx) {
-      const commands = readValidationCommands(repoPath(ctx));
-      const summary = await runRequiredValidation(repoPath(ctx), commands);
+      const commands = readValidationCommands(treePath(ctx));
+      const summary = await runRequiredValidation(treePath(ctx), commands);
       // Stored so the PR body reports the run that actually gated the
       // transition, rather than a second execution whose results may differ.
       repos.recordValidation(ctx.run.id, summary);
@@ -233,7 +341,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     },
 
     async pushBranch(ctx) {
-      await git.pushBranch(repoPath(ctx), ctx.branch, ctx.baseBranch, config.global.git.branchPrefix);
+      await git.pushBranch(treePath(ctx), ctx.branch, ctx.baseBranch, config.global.git.branchPrefix);
     },
 
     async ensureDraftPr(ctx) {
@@ -256,16 +364,16 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
 
     async review(ctx) {
       const baseSha = ctx.run.baseSha ?? ctx.baseBranch;
-      const diff = await git.diffAgainst(repoPath(ctx), baseSha);
-      const changed = await git.changedFiles(repoPath(ctx), baseSha);
+      const diff = await git.diffAgainst(treePath(ctx), baseSha);
+      const changed = await git.changedFiles(treePath(ctx), baseSha);
 
       const packet = buildFinalReviewPacket({
         issueId: ctx.run.issueId,
         originalIssue: issueContract(ctx),
         curatedIssue: issueContract(ctx),
         acceptanceCriteria: repos.acceptanceCriteria(ctx.run.issueId),
-        agentsMd: readIfPresent(repoPath(ctx), 'AGENTS.md'),
-        architectureSummary: readIfPresent(repoPath(ctx), '.ai-workflow/generated/architecture-summary.md'),
+        agentsMd: readIfPresent(treePath(ctx), 'AGENTS.md'),
+        architectureSummary: readIfPresent(treePath(ctx), '.ai-workflow/generated/architecture-summary.md'),
         diff,
         changedFiles: changed.map((c) => c.path),
       });
@@ -276,9 +384,19 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
         repos.attemptAuthorship(ctx.run.id),
         config.routing,
       );
+      // Pressure applies to reviewers too. Selecting purely on family picked
+      // the *least involved* one, which is exactly the family most likely to
+      // be the one that is disabled or out of quota — the review then failed
+      // instead of falling back to a reachable reviewer.
+      const candidates = reviewerCandidates(config.routing).filter((id) => {
+        const spec = config.routing.aliases[id];
+        return spec ? isUsable(wiring.routing.pressure, spec.provider) : false;
+      });
+      if (candidates.length === 0) throw new Error('No reachable reviewer: every provider is EXHAUSTED');
+
       const { alias, data } = await agents.reviewFinal<ReviewResult>(
         authorship,
-        reviewerCandidates(config.routing),
+        candidates,
         renderPacket(packet),
       );
 
@@ -370,6 +488,16 @@ function workerPrompt(ctx: StepContext, task: PlanTask): string {
     '',
     '## Acceptance criteria this task advances',
     ...task.acceptance_criteria.map((c) => `- ${c}`),
+    '',
+    '## Finishing',
+    'Commit your work on the branch this worktree already has checked out:',
+    '',
+    '    git add <the files you own>',
+    '    git commit -m "<what you changed>"',
+    '',
+    'A commit is how your work reaches the pull request. Integration cherry-picks',
+    'your commits into the issue branch, so an uncommitted change is a change that',
+    'never happened. Do not create a branch, do not merge, and do not push.',
     '',
     `Base branch: ${ctx.baseBranch}. Never merge, never push to the base branch.`,
   ].join('\n');

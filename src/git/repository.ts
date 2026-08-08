@@ -48,14 +48,28 @@ export function assertNotBaseBranch(branch: string, baseBranch: string): void {
  */
 export function assertControllerBranch(branch: string, prefix: string, baseBranch: string): void {
   assertNotBaseBranch(branch, baseBranch);
-  if (!prefix || !branch.startsWith(prefix)) {
+  if (!prefix || !hasControllerPrefix(branch, prefix)) {
     throw new ForbiddenGitOperation(
-      `push to "${branch}", which is not a controller branch (expected prefix "${prefix}")`,
+      `push to "${branch}", which is not a controller branch (expected segment "${prefix}")`,
     );
   }
   if (branch.includes('..') || branch.includes(' ') || branch.endsWith('/')) {
     throw new ForbiddenGitOperation(`push to malformed branch name "${branch}"`);
   }
+}
+
+/**
+ * Whether a branch carries the controller's prefix as a path segment.
+ *
+ * Not `startsWith`, because the controller does not get to name its branches:
+ * Orca creates them under the GitHub owner, so `ai/JP-9-x` is checked out as
+ * `JPClow3/ai/JP-9-x`. Requiring the prefix at position zero rejected every
+ * branch the system actually produces. Requiring it as a *segment* still
+ * rejects `feature/x` and `JPClow3/hotfix`, which is the property that matters.
+ */
+export function hasControllerPrefix(branch: string, prefix: string): boolean {
+  const normalised = prefix.endsWith('/') ? prefix : `${prefix}/`;
+  return branch.startsWith(normalised) || branch.includes(`/${normalised}`);
 }
 
 export function createGit(git: GitRunner = realGit) {

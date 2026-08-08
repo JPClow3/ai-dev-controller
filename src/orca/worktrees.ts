@@ -158,6 +158,22 @@ export function findRepoBySlug(repos: OrcaRepo[], slug: string): OrcaRepo | null
   );
 }
 
+/**
+ * The filesystem path an Orca worktree id points at.
+ *
+ * Orca ids are `<repoId>::<absolute path>`, and the path half is the only
+ * place the controller can do git work. Using the registry's repository path
+ * instead is a correctness bug, not a shortcut: that clone has the BASE branch
+ * checked out, so cherry-picking into it lands worker commits on `main`, and
+ * validating it validates code the run never produced.
+ */
+export function worktreePathFromId(worktreeId: string): string {
+  const separator = worktreeId.indexOf('::');
+  const path = separator === -1 ? '' : worktreeId.slice(separator + 2);
+  if (!path) throw new Error(`Orca worktree id "${worktreeId}" carries no path`);
+  return path;
+}
+
 /** `ai/UNI-142-add-filtering` — the branch naming the design fixes. */
 export function branchNameFor(prefix: string, issueId: string, slug: string): string {
   const clean = slug

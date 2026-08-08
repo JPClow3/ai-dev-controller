@@ -110,11 +110,16 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
         routingProfile: entry.routingProfile,
       });
     }
+    // Criteria are parsed here, deterministically, rather than left for the
+    // curator. Nothing was populating them: the review packet arrived with an
+    // empty criteria list and the PR body rendered an empty checklist, so the
+    // one thing a reviewer is meant to check against was never present.
     deps.repos.upsertIssue({
       id: issue.identifier,
       projectId: resolution.projectId,
       title: issue.title ?? null,
       body: issue.description,
+      acceptanceCriteria: parseAcceptanceCriteria(issue.description ?? ''),
     });
     deps.repos.setDependencies(issue.identifier, issue.blockedBy);
     resolvedProjects.set(issue.identifier, resolution.projectId);
@@ -266,4 +271,28 @@ export async function runLoop(deps: RunnerDeps, options: LoopOptions = {}): Prom
     options.signal?.addEventListener('abort', stop, { once: true });
     process.once('SIGINT', stop);
   });
+}
+
+/**
+ * Acceptance criteria, read from the issue body.
+ *
+ * The convention the curator prompt already produces and the pilot issues
+ * already use: a line whose first token is an `AC-<n>` label. Deliberately
+ * deterministic — criteria are the yardstick the reviewer is graded against,
+ * so they must not be re-invented by a model on every read.
+ */
+export function parseAcceptanceCriteria(body: string): Array<{ id: string; statement: string }> {
+  const found: Array<{ id: string; statement: string }> = [];
+  const seen = new Set<string>();
+
+  for (const line of body.split(/\r?\n/)) {
+    // Tolerates "- [ ] AC-1: ...", "* AC-2 — ...", "AC-3. ..."
+    const match = /^\s*(?:[-*]\s*)?(?:\[[ xX]?\]\s*)?(AC-\d+)\s*[:.—-]?\s*(.+)$/.exec(line);
+    const id = match?.[1];
+    const statement = match?.[2]?.trim();
+    if (!id || !statement || seen.has(id)) continue;
+    seen.add(id);
+    found.push({ id, statement });
+  }
+  return found;
 }

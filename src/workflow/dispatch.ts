@@ -21,6 +21,23 @@ import { logger } from '../util/log.js';
 
 const log = logger('dispatch');
 
+/** Orca reports branches fully qualified; git commands want the short name. */
+export function shortBranch(ref: string | undefined): string {
+  return (ref ?? '').replace(/^refs\/heads\//, '');
+}
+
+/**
+ * Whether an existing worktree is the one this issue asked for.
+ *
+ * Orca creates `ai/JP-9-work` as `JPClow3/ai/JP-9-work`, so an equality test
+ * against the requested name matched nothing — duplicate detection passed
+ * every time and a second worktree was created on every restart.
+ */
+export function matchesRequestedBranch(worktree: OrcaWorktree, requested: string): boolean {
+  const actual = shortBranch(worktree.branch);
+  return actual === requested || actual.endsWith(`/${requested}`) || worktree.displayName === requested;
+}
+
 export interface DispatchDeps {
   config: ControllerConfig;
   repos: ControllerRepositories;
@@ -59,8 +76,7 @@ export async function findExistingWorkspace(
   const run = deps.repos.getActiveRun(issueId);
 
   const worktrees = await listWorktrees(deps.orca).catch(() => [] as OrcaWorktree[]);
-  const orcaWorktree =
-    worktrees.find((w) => w.branch === branch || w.displayName === branch) ?? null;
+  const orcaWorktree = worktrees.find((w) => matchesRequestedBranch(w, branch)) ?? null;
 
   const gitBranchExists = await deps.git.branchExists(repoPath, branch).catch(() => false);
 
@@ -101,10 +117,11 @@ export async function dispatchNewIssue(
     // nothing ever picked it up again.
     log.info(`${input.issueId}: existing work found, adopting rather than recreating`);
     const adopted = deps.repos.getActiveRun(input.issueId) ?? deps.repos.claimIssueRun(input.issueId, input.projectId);
+    const adoptedBranch = shortBranch(existing.orcaWorktree?.branch) || branch;
     if (adopted) {
       const baseSha = await deps.git.fetchFreshBase(repoPath, baseBranch).catch(() => '');
       deps.repos.attachRunWorkspace(adopted.id, {
-        branch,
+        branch: adoptedBranch,
         ...(baseSha ? { baseSha } : {}),
         ...(existing.orcaWorktree ? { orcaWorktreeId: existing.orcaWorktree.id } : {}),
       });
@@ -113,7 +130,7 @@ export async function dispatchNewIssue(
       issueId: input.issueId,
       action: 'adopted',
       ...(adopted ? { runId: adopted.id } : {}),
-      branch,
+      branch: adoptedBranch,
       ...(existing.orcaWorktree ? { worktreeId: existing.orcaWorktree.id } : {}),
       reason: describeExisting(existing),
     };
@@ -160,21 +177,25 @@ export async function dispatchNewIssue(
   // Without this the run row keeps a NULL branch, base sha and worktree id,
   // and the very next step interpolates "id:null" into an Orca selector and
   // diffs against a stale local ref instead of the commit it branched from.
+  // The branch is the one Orca created, not the one requested: Orca namespaces
+  // it under the GitHub owner, and pushing the requested name pushed a ref
+  // that does not exist.
+  const created = shortBranch(worktree.branch) || branch;
   deps.repos.attachRunWorkspace(run.id, {
-    branch,
+    branch: created,
     baseSha,
     orcaWorktreeId: worktree.id,
   });
 
   log.info(
-    `${input.issueId}: started on ${decision.alias} (${decision.reason}) at ${branch} from ${baseSha.slice(0, 8)}`,
+    `${input.issueId}: started on ${decision.alias} (${decision.reason}) at ${created} from ${baseSha.slice(0, 8)}`,
   );
 
   return {
     issueId: input.issueId,
     action: 'started',
     runId: run.id,
-    branch,
+    branch: created,
     worktreeId: worktree.id,
     alias: decision.alias,
     reason: `routed to ${decision.alias} (${decision.reason})`,

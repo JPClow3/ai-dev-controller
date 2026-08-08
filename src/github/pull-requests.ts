@@ -137,10 +137,18 @@ export async function listRecentlyMerged(gh: GitHub, slug: string, limit = 50): 
   return (list ?? []).map(toRef);
 }
 
-/** `ai/UNI-142-...` -> `UNI-142`, so a merged PR can release its blockers. */
+/**
+ * `ai/UNI-142-...` -> `UNI-142`, so a merged PR can release its blockers.
+ *
+ * Also matches `owner/ai/UNI-142-...`: Orca namespaces the branches it creates
+ * under the GitHub owner, so an anchored match found the prefix in none of the
+ * branches this controller actually pushes.
+ */
 export function issueIdFromBranch(branch: string, prefix: string): string | null {
-  if (!branch.startsWith(prefix)) return null;
-  const rest = branch.slice(prefix.length);
+  const normalised = prefix.endsWith('/') ? prefix : `${prefix}/`;
+  const at = branch.startsWith(normalised) ? 0 : branch.indexOf(`/${normalised}`) + 1;
+  if (at <= 0 && !branch.startsWith(normalised)) return null;
+  const rest = branch.slice(at + normalised.length);
   const match = /^([A-Z][A-Z0-9]*-\d+)/.exec(rest);
   return match?.[1] ?? null;
 }

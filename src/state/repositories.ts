@@ -144,7 +144,14 @@ export function createRepositories(db: ControllerDatabase) {
            VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              project_id=excluded.project_id, title=excluded.title,
-             role=excluded.role, risk=excluded.risk, updated_at=datetime('now')`,
+             role=excluded.role, risk=excluded.risk, updated_at=datetime('now'),
+             -- Refresh criteria when the caller supplied some, but never
+             -- overwrite a populated set with an empty one: an issue edited
+             -- mid-run must not silently lose the yardstick it is graded by.
+             acceptance_json=CASE
+               WHEN excluded.acceptance_json IN ('[]', '') THEN issues.acceptance_json
+               ELSE excluded.acceptance_json
+             END`,
         )
         .run(
           issue.id,
@@ -287,6 +294,92 @@ export function createRepositories(db: ControllerDatabase) {
           );
         }
       });
+    },
+
+    /**
+     * Every task of a run, in plan order.
+     *
+     * Dispatch needs this to find tasks whose blockers have finished; without
+     * it a plan with any sequential step silently loses the dependent half.
+     */
+    runTasks(runId: string): Array<{
+      id: string;
+      summary: string;
+      task_category: string;
+      owns: string[];
+      blocked_by: string[];
+      acceptance_criteria: string[];
+      risk: string;
+      state: string;
+      branch: string | null;
+      orcaWorktreeId: string | null;
+    }> {
+      const rows = db.raw
+        .prepare(
+          `SELECT task_key, summary, role, risk, owns_json, blocked_by_json, criteria_json,
+                  state, branch, orca_worktree_id
+             FROM tasks WHERE run_id = ? ORDER BY id`,
+        )
+        .all(runId) as Array<{
+        task_key: string;
+        summary: string | null;
+        role: string | null;
+        risk: string;
+        owns_json: string;
+        blocked_by_json: string;
+        criteria_json: string;
+        state: string;
+        branch: string | null;
+        orca_worktree_id: string | null;
+      }>;
+
+      const list = (json: string): string[] => {
+        try {
+          const parsed = JSON.parse(json) as unknown;
+          return Array.isArray(parsed) ? (parsed as string[]) : [];
+        } catch {
+          return [];
+        }
+      };
+
+      return rows.map((row) => ({
+        id: row.task_key,
+        summary: row.summary ?? '',
+        task_category: row.role ?? 'routine_behavior',
+        owns: list(row.owns_json),
+        blocked_by: list(row.blocked_by_json),
+        acceptance_criteria: list(row.criteria_json),
+        risk: row.risk,
+        state: row.state,
+        branch: row.branch,
+        orcaWorktreeId: row.orca_worktree_id,
+      }));
+    },
+
+    setTaskState(runId: string, taskKey: string, state: string): void {
+      db.raw.prepare('UPDATE tasks SET state = ? WHERE run_id = ? AND task_key = ?').run(state, runId, taskKey);
+    },
+
+    /**
+     * Attaches the outcome to a task's newest attempt.
+     *
+     * `workerCommits` reads this, and nothing was ever writing it: every
+     * integration therefore found zero commits and every run died at
+     * INTEGRATING with "no worker produced any commit".
+     */
+    recordAttemptResult(runId: string, taskKey: string, result: unknown): void {
+      const row = db.raw
+        .prepare(
+          `SELECT a.id AS id FROM attempts a
+             JOIN tasks t ON t.id = a.task_id
+            WHERE t.run_id = ? AND t.task_key = ? AND a.role = 'worker'
+            ORDER BY a.attempt_no DESC LIMIT 1`,
+        )
+        .get(runId, taskKey) as { id: number } | undefined;
+      if (!row) return;
+      db.raw
+        .prepare(`UPDATE attempts SET result_json = ?, ended_at = datetime('now') WHERE id = ?`)
+        .run(JSON.stringify(result), row.id);
     },
 
     /**
