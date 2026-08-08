@@ -37,13 +37,59 @@ function readSchema(rootDir: string, schema: string): string {
  */
 export function extractJson(raw: string): unknown {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(raw);
-  const candidate = fenced?.[1] ?? raw;
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start === -1 || end === -1 || end < start) {
-    throw new Error('no JSON object found in the response');
+  const candidate = (fenced?.[1] ?? raw).trim();
+
+  // Cheap path: the whole thing is already an object.
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch {
+    /* fall through */
   }
-  return JSON.parse(candidate.slice(start, end + 1));
+
+  // Scan for balanced objects rather than slicing first `{` to last `}`.
+  // `codex exec` echoes the reply and then prints a token summary, so that
+  // naive span covers two objects plus prose and never parses.
+  const objects = balancedObjects(candidate);
+  for (let i = objects.length - 1; i >= 0; i -= 1) {
+    try {
+      return JSON.parse(objects[i]!) as unknown;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  throw new Error('no JSON object found in the response');
+}
+
+/** Every balanced `{...}` span, ignoring braces inside strings. */
+function balancedObjects(text: string): string[] {
+  const found: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        found.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return found;
 }
 
 export interface InvokerOptions {
@@ -103,8 +149,18 @@ export function createInvoker(options: InvokerOptions) {
     let raw = '';
     let user = request.input;
 
+    // Handed to the transport so providers that support native structured
+    // output can enforce it rather than merely being asked.
+    const schemaObject = JSON.parse(readSchema(options.rootDir, request.schema)) as object;
+
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const completion = await transport.complete({ alias, system, user, timeoutMs });
+      const completion = await transport.complete({
+        alias,
+        system,
+        user,
+        timeoutMs,
+        schema: schemaObject,
+      });
       raw = completion.text;
 
       let parsed: unknown;

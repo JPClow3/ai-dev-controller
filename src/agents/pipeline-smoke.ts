@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { loadControllerConfig } from '../config/load-config.js';
 import { createInvoker } from './invoke.js';
 import { ollamaTransport } from './ollama-profiles.js';
+import { codexTransport } from './codex-profiles.js';
 import { createAgents, reviewerCandidates } from './roles.js';
 import { StructuredInvocationError } from './types.js';
 import { overlappingOwnership } from '../git/integration.js';
@@ -35,7 +36,11 @@ function bad(label: string, detail = ''): void {
 }
 
 async function main(): Promise<void> {
-  const invoker = createInvoker({ rootDir: ROOT, routing: config.routing, transports: [ollamaTransport()] });
+  const invoker = createInvoker({
+    rootDir: ROOT,
+    routing: config.routing,
+    transports: [ollamaTransport(), codexTransport()],
+  });
   const agents = createAgents(invoker, config.routing);
   let failures = 0;
 

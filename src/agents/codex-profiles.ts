@@ -1,17 +1,25 @@
 import { execa } from 'execa';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ModelAlias } from '../config/routing-schema.js';
 import type { StructuredTransport } from './types.js';
 
 /**
  * Codex CLI in non-interactive mode, for the ChatGPT-backed tiers.
  *
- * UNVERIFIED against a live account: the Codex weekly quota was exhausted when
- * this was written, so the flag shape below is from `codex --help` and has not
- * been observed returning a real completion. Treat the first successful run as
- * the actual test.
+ * Two flags do the heavy lifting, and both were found the hard way:
  *
- * `codex exec` is used rather than the interactive TUI, and the sandbox is
- * pinned read-only: a structured call must never touch the filesystem.
+ *   --output-last-message  `codex exec` prints a banner, the conversation and
+ *                          a token summary to stdout. Scraping JSON out of
+ *                          that is unreliable: the first `{` and last `}` span
+ *                          the trailing duplicate of the reply, producing
+ *                          invalid JSON. This flag writes only the final
+ *                          assistant message.
+ *
+ *   --output-schema        Native structured output, the Codex equivalent of
+ *                          Ollama's `response_format`. Enforcing the shape at
+ *                          the provider is much stronger than asking politely.
  */
 export function codexTransport(bin = process.env['CODEX_BIN'] ?? 'codex'): StructuredTransport {
   return {
@@ -21,44 +29,101 @@ export function codexTransport(bin = process.env['CODEX_BIN'] ?? 'codex'): Struc
       return alias.provider === 'chatgpt';
     },
 
-    async complete({ alias, system, user, timeoutMs }) {
-      const prompt = `${system}\n\n---\n\n${user}\n\nRespond with a single JSON object and nothing else.`;
+    async complete({ alias, system, user, timeoutMs, schema }) {
+      const dir = mkdtempSync(join(tmpdir(), 'ai-dev-codex-'));
+      const messagePath = join(dir, 'last-message.txt');
+      const schemaPath = join(dir, 'schema.json');
+
+      const args = [
+        'exec',
+        '--profile',
+        alias.profile,
+        '--sandbox',
+        'read-only',
+        '--skip-git-repo-check',
+        '--output-last-message',
+        messagePath,
+      ];
+
+      // Native enforcement only when the schema is inside OpenAI's supported
+      // subset. Ours mostly are not: they use `allOf`/`if`/`then` to make
+      // required fields depend on `verdict`, and the API rejects that with
+      // "'allOf' is not permitted". Sending it anyway fails the whole call, so
+      // an incompatible schema falls back to the prompt copy plus local Ajv
+      // validation - which is the real gate in either case.
+      if (schema && supportsNativeSchema(schema)) {
+        writeFileSync(schemaPath, JSON.stringify(schema), 'utf8');
+        args.push('--output-schema', schemaPath);
+      }
+
+      // `-` makes codex read the prompt from stdin. Passing it as an argument
+      // breaks on Windows: the system prompt plus an embedded JSON Schema
+      // exceeds the ~32KB command-line limit and fails with "command line too
+      // long" before the model is ever contacted.
+      args.push('-');
+      const prompt = `${system}\n\n---\n\n${user}`;
 
       try {
-        const result = await execa(
-          bin,
-          [
-            'exec',
-            '--profile',
-            alias.profile,
-            '--sandbox',
-            'read-only',
-            '--skip-git-repo-check',
-            prompt,
-          ],
-          { timeout: timeoutMs, reject: true, stdin: 'ignore' },
-        );
-        const text = result.stdout.trim();
-        if (!text) throw new Error(`codex exec --profile ${alias.profile} produced no output`);
-        return { text };
+        const result = await execa(bin, args, { timeout: timeoutMs, reject: true, input: prompt });
+
+        let text = '';
+        try {
+          text = readFileSync(messagePath, 'utf8').trim();
+        } catch {
+          // Fall back to stdout only if the flag produced nothing.
+          text = result.stdout.trim();
+        }
+        if (!text) throw new Error(`codex exec --profile ${alias.profile} produced no final message`);
+
+        return { text, ...parseUsage(result.stdout) };
       } catch (err) {
-        const e = err as { timedOut?: boolean; stderr?: string; message?: string };
+        const e = err as { timedOut?: boolean; stderr?: string; stdout?: string; message?: string };
         if (e.timedOut) {
           throw new Error(`codex exec --profile ${alias.profile} timed out after ${timeoutMs}ms`);
         }
-        const stderr = e.stderr ?? '';
-        if (/rate limit|quota|429/i.test(stderr)) {
+        const detail = `${e.stderr ?? ''}\n${e.stdout ?? ''}`;
+        if (/rate limit|quota|usage limit|429/i.test(detail)) {
           throw new Error(
-            `Codex quota exhausted for profile ${alias.profile}. Routing should mark this provider EXHAUSTED.`,
+            `Codex quota exhausted for profile ${alias.profile}. Routing should mark chatgpt EXHAUSTED.`,
           );
         }
-        throw new Error(`codex exec --profile ${alias.profile} failed: ${stderr || e.message}`);
+        if (/legacy `profile`|cannot be used while/i.test(detail)) {
+          throw new Error(
+            `Codex profile "${alias.profile}" is in the legacy config.toml format. ` +
+              `Move it to ~/.codex/${alias.profile}.config.toml.`,
+          );
+        }
+        throw new Error(`codex exec --profile ${alias.profile} failed: ${detail.trim().slice(0, 400)}`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
     },
   };
 }
 
-/** Profiles this controller expects in ~/.codex/config.toml. */
+/** Keywords OpenAI's structured-output schema subset rejects. */
+const UNSUPPORTED_KEYWORDS = ['allOf', 'anyOf', 'oneOf', 'if', 'then', 'else', 'not', '$ref'];
+
+export function supportsNativeSchema(schema: unknown): boolean {
+  if (schema === null || typeof schema !== 'object') return true;
+  if (Array.isArray(schema)) return schema.every(supportsNativeSchema);
+
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    if (UNSUPPORTED_KEYWORDS.includes(key)) return false;
+    if (!supportsNativeSchema(value)) return false;
+  }
+  return true;
+}
+
+/** `codex exec` prints a "tokens used" line; best-effort, never load-bearing. */
+function parseUsage(stdout: string): { usage?: { outputTokens?: number } } {
+  const match = /tokens used\s*[\r\n]+\s*([\d.,]+)/i.exec(stdout);
+  if (!match?.[1]) return {};
+  const tokens = Number.parseInt(match[1].replace(/[.,]/g, ''), 10);
+  return Number.isFinite(tokens) ? { usage: { outputTokens: tokens } } : {};
+}
+
+/** Profiles this controller expects as ~/.codex/<name>.config.toml files. */
 export const EXPECTED_CODEX_PROFILES = [
   'gpt-luna-low',
   'gpt-luna-high',

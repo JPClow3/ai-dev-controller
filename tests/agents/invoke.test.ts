@@ -56,6 +56,38 @@ describe('extractJson', () => {
   it('throws when there is no object at all', () => {
     expect(() => extractJson('I cannot help with that')).toThrow(/no JSON object/);
   });
+
+  /**
+   * Regression: `codex exec` prints a banner, echoes the reply, then prints a
+   * token summary and the reply again. Slicing first `{` to last `}` spans
+   * both objects plus the prose between them and never parses.
+   */
+  it('handles codex exec output that repeats the object', () => {
+    const stdout = [
+      'OpenAI Codex v0.144.6',
+      '--------',
+      'model: gpt-5.6-luna',
+      '--------',
+      'codex',
+      '{"verdict":"approve"}',
+      'tokens used',
+      '11.080',
+      '{"verdict":"approve"}',
+    ].join('\n');
+    expect(extractJson(stdout)).toEqual({ verdict: 'approve' });
+  });
+
+  it('takes the last complete object when several are present', () => {
+    expect(extractJson('{"a":1}\nthen\n{"b":2}')).toEqual({ b: 2 });
+  });
+
+  it('is not confused by braces inside strings', () => {
+    expect(extractJson('{"note":"a } brace","ok":true}')).toEqual({ note: 'a } brace', ok: true });
+  });
+
+  it('handles nested objects', () => {
+    expect(extractJson('noise {"a":{"b":{"c":1}}} more')).toEqual({ a: { b: { c: 1 } } });
+  });
 });
 
 describe('structured invocation', () => {
