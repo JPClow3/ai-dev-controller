@@ -8,6 +8,7 @@ dist/
 # here rather than in the repository being worked on, so that a worker cannot
 # commit them into its own pull request.
 data/workers/
+data/controller.lock
 data/*.db
 data/*.db-wal
 data/*.db-shm
