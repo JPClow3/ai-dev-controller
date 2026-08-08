@@ -1,5 +1,5 @@
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { ControllerConfig } from '../config/load-config.js';
 import type { ControllerRepositories } from '../state/repositories.js';
 import type { Agents } from '../agents/roles.js';
@@ -96,6 +96,11 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     return project(ctx).repository.github;
   }
 
+  /** Controller-owned scratch for one worker, deliberately not in the repo. */
+  function workerControlDir(ctx: StepContext, taskKey: string): string {
+    return resolve(config.rootDir, 'data', 'workers', ctx.run.id, taskKey);
+  }
+
   function readIfPresent(base: string, relative: string): string {
     const path = join(base, relative);
     return existsSync(path) ? readFileSync(path, 'utf8') : '';
@@ -139,13 +144,17 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     });
 
     // Both go to files: the prompt exceeds the Windows argv limit, and the
-    // files survive for inspection after the run.
-    writeFileSync(join(worktree.path, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
-    writeFileSync(join(worktree.path, WORKER_SCRIPT_FILE), workerScript(profile), 'utf8');
+    // files survive for inspection after the run. They go OUTSIDE the
+    // worktree so they cannot end up in the worker's commit.
+    const controlDir = workerControlDir(ctx, task.id);
+    mkdirSync(controlDir, { recursive: true });
+    writeFileSync(join(controlDir, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
+    writeFileSync(join(controlDir, WORKER_SCRIPT_FILE), workerScript(profile, controlDir), 'utf8');
 
     await launchWorker(orca, {
       worktreeSelector: `id:${worktree.id}`,
       title: `${ctx.run.issueId}/${task.id}`,
+      controlDir,
     });
 
     repos.recordTasks(ctx.run.id, [
@@ -160,11 +169,33 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     log.info(`${ctx.run.issueId}/${task.id}: dispatched to ${decision.alias} (${profile})`);
   }
 
+  /**
+   * The worktree's tracked files, capped.
+   *
+   * Capped rather than truncated silently: a planner that is told it has the
+   * whole tree, and is handed a third of it, will confidently declare
+   * ownership of paths it never saw. The cap says so out loud.
+   */
+  async function trackedFiles(ctx: StepContext, limit = 600): Promise<string> {
+    try {
+      const out = await wiring.gitRunner(treePath(ctx), ['ls-files']);
+      const files = out.split('\n').filter(Boolean);
+      if (files.length <= limit) return files.join('\n');
+      return [
+        ...files.slice(0, limit),
+        `... ${files.length - limit} more tracked file(s) not shown; ask for a subtree if you need them.`,
+      ].join('\n');
+    } catch {
+      return '(file tree unavailable)';
+    }
+  }
+
   /** Records what a finished worker actually committed on its own branch. */
   async function harvestCommits(
     ctx: StepContext,
     taskKey: string,
     workerPath: string,
+    controlDir: string,
   ): Promise<Array<{ sha: string; message: string }>> {
     const baseSha = ctx.run.baseSha;
     if (!baseSha) return [];
@@ -178,7 +209,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     const ordered = [...commits].reverse();
     repos.recordAttemptResult(ctx.run.id, taskKey, {
       commits: ordered,
-      finalMessage: readIfPresent(workerPath, WORKER_RESULT_FILE).slice(0, 4000),
+      finalMessage: readIfPresent(controlDir, WORKER_RESULT_FILE).slice(0, 4000),
     });
     return ordered;
   }
@@ -214,6 +245,13 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
           readValidationCommands(treePath(ctx))
             .map((c) => `- ${c.name}: ${c.command}${c.required ? ' (required)' : ''}`)
             .join('\n') || '- none declared',
+          '',
+          // The prompt tells the planner it receives the worktree's file tree.
+          // It did not, so every `owns` glob was guessed from the issue text
+          // alone — and a glob that matches nothing produces a worker with no
+          // files it is allowed to touch.
+          '## Repository tree (tracked files)',
+          await trackedFiles(ctx),
           '',
           `Base branch: ${ctx.baseBranch}`,
         ].join('\n'),
@@ -297,7 +335,8 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       for (const task of tasks) {
         if (!task.orcaWorktreeId) continue;
         const path = worktreePathFromId(task.orcaWorktreeId);
-        const exit = readWorkerExit(readIfPresent(path, WORKER_EXIT_FILE) || null);
+        const control = workerControlDir(ctx, task.id);
+        const exit = readWorkerExit(readIfPresent(control, WORKER_EXIT_FILE) || null);
 
         if (exit === null) {
           pending += 1;
@@ -314,7 +353,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
         // are the only thing integration has to work with, and nothing was
         // writing them, so every run reached INTEGRATING and reported "no
         // worker produced any commit".
-        const commits = await harvestCommits(ctx, task.id, path);
+        const commits = await harvestCommits(ctx, task.id, path, control);
         repos.setTaskState(ctx.run.id, task.id, 'DONE');
         log.info(`${ctx.run.issueId}/${task.id}: finished with ${commits.length} commit(s)`);
       }

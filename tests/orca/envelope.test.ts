@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import { createOrcaClient } from '../../src/orca/client.js';
 import {
   createParentWorktree,
@@ -13,6 +14,9 @@ import {
   workerScript,
   readWorkerExit,
 } from '../../src/orca/terminals.js';
+
+/** Controller-owned scratch directory, deliberately outside any worktree. */
+const CONTROL = 'C:/ai-dev/data/workers/run-1/api';
 
 function fakeCli(result: unknown) {
   const calls: string[][] = [];
@@ -75,6 +79,7 @@ describe('Orca wraps single objects under a named key', () => {
     const term = await launchWorker(client, {
       worktreeSelector: 'id:w',
       title: 'JP-7/api',
+      controlDir: 'C:/ctl/JP-7/api',
     });
     expect(term.handle).toBe('term_abc');
   });
@@ -121,7 +126,7 @@ describe('worker launch needs no GUI-registered agent', () => {
    * make the pipeline un-runnable from a script.
    */
   it('runs codex exec as a plain command', () => {
-    const script = workerScript('gpt-luna-high');
+    const script = workerScript('gpt-luna-high', CONTROL);
     expect(script).toContain('codex exec');
     expect(script).toContain('--profile gpt-luna-high');
     expect(script).toContain('--sandbox workspace-write');
@@ -134,18 +139,30 @@ describe('worker launch needs no GUI-registered agent', () => {
    * ever invoked, and nothing in the controller could see it.
    */
   it('pipes the prompt instead of redirecting it', () => {
-    const script = workerScript('x');
-    expect(script).not.toMatch(/<\s*\.ai-worker-prompt/);
-    expect(script).toContain('Get-Content -Raw .ai-worker-prompt.txt |');
+    const script = workerScript('x', CONTROL);
+    expect(script).not.toMatch(/<\s*'?\S*prompt/);
+    expect(script).toContain(`Get-Content -Raw '${join(CONTROL, 'prompt.txt')}' |`);
   });
 
   it('reads the prompt from a file, not argv', () => {
     // The prompt plus schema exceeds the Windows command-line limit.
-    expect(workerScript('x')).toContain('.ai-worker-prompt.txt');
+    expect(workerScript('x', CONTROL)).toContain(join(CONTROL, 'prompt.txt'));
   });
 
   it('captures only the final message', () => {
-    expect(workerScript('x')).toContain('--output-last-message .ai-worker-result.txt');
+    expect(workerScript('x', CONTROL)).toContain(`--output-last-message '${join(CONTROL, 'result.txt')}'`);
+  });
+
+  /**
+   * The controller's scratch used to sit in the worktree, one `git add -A`
+   * away from being committed into the pull request.
+   */
+  it('keeps every control file out of the repository', () => {
+    const script = workerScript('x', CONTROL);
+    for (const name of ['prompt.txt', 'result.txt', 'exit.txt']) {
+      expect(script).toContain(join(CONTROL, name));
+    }
+    expect(script).not.toMatch(/(^|\s)'?\.\//m);
   });
 
   /**
@@ -153,13 +170,15 @@ describe('worker launch needs no GUI-registered agent', () => {
    * and no exit code, so completion has to be recorded by the worker itself.
    */
   it('records its own exit status where the controller can read it', () => {
-    const script = workerScript('x');
+    const script = workerScript('x', CONTROL);
     expect(script).toContain('$LASTEXITCODE');
-    expect(script).toContain('Set-Content -Path .ai-worker-exit.txt');
+    expect(script).toContain(`Set-Content -Path '${join(CONTROL, 'exit.txt')}'`);
   });
 
   it('launches the script through an explicit pwsh, not the ambient shell', () => {
-    expect(workerCommand()).toBe('pwsh -NoProfile -ExecutionPolicy Bypass -File .ai-worker-run.ps1');
+    expect(workerCommand(CONTROL)).toBe(
+      `pwsh -NoProfile -ExecutionPolicy Bypass -File '${join(CONTROL, 'run.ps1')}'`,
+    );
   });
 
   it('treats a missing sentinel as still running, never as success', () => {
