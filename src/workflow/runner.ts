@@ -114,6 +114,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
       id: issue.identifier,
       projectId: resolution.projectId,
       title: issue.title ?? null,
+      body: issue.description,
     });
     deps.repos.setDependencies(issue.identifier, issue.blockedBy);
     resolvedProjects.set(issue.identifier, resolution.projectId);

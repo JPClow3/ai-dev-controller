@@ -133,12 +133,15 @@ export async function dispatchNewIssue(
     };
   }
 
+  // No `--agent`: the parent worktree holds the integrated branch, and its
+  // workers run in child worktrees. Requesting an agent here would also
+  // require a GUI-registered custom agent, which cannot be created from a
+  // script.
   const worktree = await createParentWorktree(deps.orca, {
     repoSelector: `id:${repo.id}`,
     name: branch,
     baseBranch,
     linearIssue: input.issueId,
-    agent: deps.agentNameFor(decision.alias),
   });
 
   // Without this the run row keeps a NULL branch, base sha and worktree id,

@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { assertTransitionAllowed, InvalidTransitionError } from '../../src/workflow/transitions.js';
-import { nextAfterLocalValidation, type CiTrigger } from '../../src/workflow/states.js';
+import { nextAfterLocalValidation } from '../../src/workflow/states.js';
+import { detectCiTrigger } from '../../src/knowledge/derive.js';
 import { loadControllerConfig } from '../../src/config/load-config.js';
 
 const proven = (...keys: string[]) => Object.fromEntries(keys.map((k) => [k, true]));
@@ -133,28 +132,21 @@ describe('the finished PR is still gated', () => {
 describe('registry CI modes match the repositories on disk', () => {
   const entries = Object.entries(registry.projects);
 
-  function detectTrigger(repoPath: string): CiTrigger {
-    const dir = join(repoPath, '.github/workflows');
-    if (!existsSync(dir)) return 'none';
-    const files = readdirSync(dir).filter((f) => /\.ya?ml$/i.test(f));
-    if (files.length === 0) return 'none';
-    for (const file of files) {
-      const text = readFileSync(join(dir, file), 'utf8');
-      const on = /^on:\s*([\s\S]*?)(?=^\S)/m.exec(text)?.[1] ?? '';
-      if (on.includes('pull_request')) return 'pull_request';
-    }
-    return 'branch_push';
-  }
-
+  // The production detector, not a second implementation: a naive copy here
+  // would have kept passing while the real one was wrong about Portfolio.
   for (const [id, project] of entries) {
     it(`${id} declares the trigger its workflows actually use`, () => {
-      expect(project.ci.trigger).toBe(detectTrigger(project.repository.path));
+      expect(project.ci.trigger).toBe(
+        detectCiTrigger(project.repository.path, project.repository.baseBranch),
+      );
     });
   }
 
-  it('flags any repository running without CI as an explicit weaker mode', () => {
-    const noCi = entries.filter(([, p]) => p.ci.trigger === 'none').map(([id]) => id);
-    // Not an error, but it must be declared rather than discovered later.
-    expect(noCi).toEqual(['hefesto-site']);
+  it('flags every repository running without CI as an explicit weaker mode', () => {
+    const noCi = entries.filter(([, p]) => p.ci.trigger === 'none').map(([id]) => id).sort();
+    // Not an error, but it must be declared rather than discovered mid-run.
+    // Portfolio is here because its workflow targets `master` while the repo
+    // is on `main`, so no check has ever run.
+    expect(noCi).toEqual(['hefesto-site', 'portfolio']);
   });
 });

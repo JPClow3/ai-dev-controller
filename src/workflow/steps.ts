@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ControllerConfig } from '../config/load-config.js';
 import type { ControllerRepositories } from '../state/repositories.js';
@@ -9,7 +9,7 @@ import type { GitHub } from '../github/client.js';
 import type { Git } from '../git/repository.js';
 import { createIntegrator } from '../git/integration.js';
 import type { GitRunner } from '../git/repository.js';
-import { listTerminals } from '../orca/terminals.js';
+import { listTerminals, launchWorker, WORKER_PROMPT_FILE } from '../orca/terminals.js';
 import { createWorkerWorktree } from '../orca/worktrees.js';
 import { ensureDraftPullRequest, updatePullRequestBody, findPullRequestByBranch } from '../github/pull-requests.js';
 import { readChecks } from '../github/checks.js';
@@ -148,11 +148,24 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
           { projectId: ctx.projectId, role, risk: task.risk ?? 'low' },
           wiring.routing,
         );
+        // No `--agent`: custom agents can only be registered through the Orca
+        // GUI, which would make this un-runnable from a script. The worker is
+        // launched as a plain command instead.
         const worktree = await createWorkerWorktree(orca, {
           parentSelector: `id:${parent}`,
           name: `${ctx.branch}/${task.id}`,
-          agent: wiring.agentNameFor(decision.alias),
-          prompt: workerPrompt(ctx, task),
+        });
+
+        const profile = config.routing.aliases[decision.alias]?.profile;
+        if (!profile) throw new Error(`Alias ${decision.alias} declares no Codex profile`);
+
+        // The prompt goes to a file: it exceeds the Windows argv limit, and a
+        // file also survives for inspection after the run.
+        writeFileSync(join(worktree.path, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
+        await launchWorker(orca, {
+          worktreeSelector: `id:${worktree.id}`,
+          profile,
+          title: `${ctx.run.issueId}/${task.id}`,
         });
 
         repos.recordTasks(ctx.run.id, [

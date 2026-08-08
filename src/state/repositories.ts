@@ -135,7 +135,9 @@ export function createRepositories(db: ControllerDatabase) {
         .run({ ...project, enabled: project.enabled ? 1 : 0 });
     },
 
-    upsertIssue(issue: Pick<IssueRow, 'id' | 'projectId' | 'title'> & Partial<IssueRow>): void {
+    upsertIssue(
+      issue: Pick<IssueRow, 'id' | 'projectId' | 'title'> & Partial<IssueRow> & { body?: string },
+    ): void {
       db.raw
         .prepare(
           `INSERT INTO issues (id, project_id, title, role, risk, state, acceptance_json)
@@ -153,6 +155,14 @@ export function createRepositories(db: ControllerDatabase) {
           issue.state ?? 'DISCOVERED',
           JSON.stringify(issue.acceptanceCriteria ?? []),
         );
+      // Keep the raw Linear description available even before the curator has
+      // run. Without it the planner receives a placeholder and correctly
+      // refuses, which stalls the pipeline for the wrong reason.
+      if (issue.body !== undefined) {
+        db.raw
+          .prepare('UPDATE issues SET curated_body = COALESCE(curated_body, ?) WHERE id = ?')
+          .run(issue.body, issue.id);
+      }
     },
 
     /** Replaces the explicit blocker set for an issue. Linear is authoritative. */
@@ -409,6 +419,29 @@ export function createRepositories(db: ControllerDatabase) {
       } catch {
         return [];
       }
+    },
+
+    /** Per-repository, per-role evidence for one alias, or null with no samples. */
+    aliasStats(
+      projectId: string,
+      role: string,
+      alias: string,
+    ): { samples: number; compositeAvg: number | null; successRate: number | null; medianMinutes: number | null } | null {
+      const row = db.raw
+        .prepare(
+          `SELECT samples, composite_avg, success_rate, median_minutes FROM routing_stats
+           WHERE scope = 'repository' AND project_id = ? AND role = ? AND alias_id = ?`,
+        )
+        .get(projectId, role, alias) as
+        | { samples: number; composite_avg: number | null; success_rate: number | null; median_minutes: number | null }
+        | undefined;
+      if (!row) return null;
+      return {
+        samples: row.samples,
+        compositeAvg: row.composite_avg,
+        successRate: row.success_rate,
+        medianMinutes: row.median_minutes,
+      };
     },
 
     activeRuns(): RunRecord[] {

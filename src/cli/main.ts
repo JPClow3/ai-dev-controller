@@ -12,6 +12,8 @@ import { openBootstrapPullRequest } from '../knowledge/bootstrap-pr.js';
 import { realGit } from '../git/repository.js';
 import { createGitHub } from '../github/client.js';
 import { reconcileAll, applicable } from '../recovery/reconcile.js';
+import { buildController } from '../workflow/wire.js';
+import { runLoop } from '../workflow/runner.js';
 
 /**
  * Operational escape hatch, not a daily tool. The normal loop is
@@ -325,12 +327,26 @@ program
   .command('run')
   .description('start the scheduler polling loop')
   .option('--once', 'run a single tick and exit')
-  .action(async (opts: { once?: boolean }) => {
+  .option('--dry-run', 'never write to Linear')
+  .action(async (opts: { once?: boolean; dryRun?: boolean }) => {
     const config = loadControllerConfig(ROOT);
-    console.error(pc.yellow('The scheduler loop needs its dependencies wired to live services.'));
-    console.error('Run `ai-dev doctor` first, then `ai-dev recover` to reconcile.');
-    console.error(pc.dim(`Poll interval would be ${config.global.pollIntervalSeconds}s; once=${opts.once ?? false}.`));
-    process.exitCode = 2;
+    const db = openDatabase(config.global.paths.database);
+    try {
+      const repos = createRepositories(db);
+      const { runnerDeps } = buildController({ config, repos, writeToLinear: !opts.dryRun });
+
+      const reports = await runLoop(runnerDeps, { once: opts.once ?? false });
+      const last = reports[reports.length - 1];
+      if (last) {
+        console.log(
+          `ready ${last.readyIssues.length} | dispatched ${last.dispatched.length} | ` +
+            `blocked ${last.blockedIssues.length} | needs-context ${last.needsContext.length}` +
+            (last.throttled ? ' | THROTTLED' : ''),
+        );
+      }
+    } finally {
+      db.close();
+    }
   });
 
 program

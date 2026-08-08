@@ -94,3 +94,44 @@ export async function launchAgent(
     `agent:${input.agentName}`,
   ]);
 }
+
+/** Where a worker's prompt and final message live inside its worktree. */
+export const WORKER_PROMPT_FILE = '.ai-worker-prompt.txt';
+export const WORKER_RESULT_FILE = '.ai-worker-result.txt';
+
+/**
+ * The command that runs a worker inside its worktree.
+ *
+ * Uses `codex exec` directly rather than a registered Orca custom agent.
+ * Custom agents can only be added through the desktop GUI, which would make
+ * the whole pipeline un-runnable from a script; a plain command has no such
+ * dependency. The prompt is redirected from a file because it exceeds the
+ * Windows command-line limit.
+ */
+export function workerCommand(profile: string): string {
+  return [
+    'codex exec',
+    `--profile ${profile}`,
+    '--sandbox workspace-write',
+    '--skip-git-repo-check',
+    `--output-last-message ${WORKER_RESULT_FILE}`,
+    `- < ${WORKER_PROMPT_FILE}`,
+  ].join(' ');
+}
+
+/** Launches a worker from a prompt file already written into the worktree. */
+export async function launchWorker(
+  client: OrcaClient,
+  input: { worktreeSelector: string; profile: string; title: string },
+): Promise<OrcaTerminal> {
+  return client.json<OrcaTerminal>([
+    'terminal',
+    'create',
+    '--worktree',
+    input.worktreeSelector,
+    '--command',
+    workerCommand(input.profile),
+    '--title',
+    input.title,
+  ]);
+}
