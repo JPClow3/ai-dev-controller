@@ -34,9 +34,16 @@ export interface CapacityDecision {
 export interface DispatchRequest {
   issueId: string;
   repositoryId: string;
-  provider: 'chatgpt' | 'ollama';
-  heavy: boolean;
-  luna: boolean;
+  /**
+   * Left undefined for work that has not been routed to a model yet.
+   *
+   * Provider sub-limits are only meaningful once an alias is chosen. Assuming
+   * a provider at queue time would burn that provider's reserved slots on work
+   * that might end up on the other family entirely.
+   */
+  provider?: 'chatgpt' | 'ollama';
+  heavy?: boolean;
+  luna?: boolean;
   /** True when this dispatch would also open a new issue slot. */
   startsNewIssue: boolean;
   /** Per-repository override from the registry, if any. */
@@ -76,8 +83,9 @@ export function availableCapacity(
     [remaining.agents <= 0, 'global_agents'],
     [remaining.issueWorkers <= 0, 'workers_per_issue'],
     [remaining.repository <= 0, 'agents_per_repository'],
-    [request.heavy && remaining.gptHeavy <= 0, 'gpt_heavy_agents'],
-    [request.luna && remaining.lunaWorkers <= 0, 'gpt_luna_workers'],
+    // Provider sub-limits apply only once a model has actually been chosen.
+    [request.heavy === true && remaining.gptHeavy <= 0, 'gpt_heavy_agents'],
+    [request.luna === true && remaining.lunaWorkers <= 0, 'gpt_luna_workers'],
     [request.provider === 'ollama' && remaining.ollamaWorkers <= 0, 'ollama_workers'],
   ];
 
