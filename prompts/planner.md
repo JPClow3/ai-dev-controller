@@ -45,7 +45,7 @@ tasks:
 
 - `id` - short, stable, lowercase
 - `summary` - one sentence
-- `task_category` - a key from `config/routing.yaml -> matrix`; this determines
+- `task_category` - a key from `config/routing.yaml -> roles`; this determines
   which worker class the router considers
 - `owns` - glob list
 - `blocked_by` - list of task ids

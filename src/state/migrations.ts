@@ -258,9 +258,22 @@ const ISSUE_URL = `
 ALTER TABLE issues ADD COLUMN url TEXT;
 `;
 
+/** Exact commit interval owned by one worker attempt, including retries. */
+const ATTEMPT_COMMIT_RANGE = `
+ALTER TABLE attempts ADD COLUMN base_sha TEXT;
+ALTER TABLE attempts ADD COLUMN head_sha TEXT;
+`;
+
+/** Provider cooldown deadline learned from a real transport refusal. */
+const PROVIDER_PRESSURE_RESET = `
+ALTER TABLE provider_pressure ADD COLUMN reset_at TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'init', sql: INIT },
   { version: 2, name: 'issue_url', sql: ISSUE_URL },
+  { version: 3, name: 'attempt_commit_range', sql: ATTEMPT_COMMIT_RANGE },
+  { version: 4, name: 'provider_pressure_reset', sql: PROVIDER_PRESSURE_RESET },
 ];
 
 export function applyMigrations(db: BetterSqlite3.Database): number {

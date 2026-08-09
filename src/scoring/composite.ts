@@ -5,6 +5,8 @@ export interface AttemptMetrics {
   role: string;
   criteria: Array<{ id: string; verdict: CriterionVerdict; evidence?: string }>;
   remediationCycles: number;
+  /** Objective remote-CI evidence, or neutral 0.5 when the repository has none. */
+  ciScore: number;
   findings: Array<{ severity: Severity }>;
   churnPenalty: number;
   /** Normalised 0..1 provider-quota consumption, not API dollars. */
@@ -54,7 +56,7 @@ export function scoreAttempt(metrics: AttemptMetrics, config: ScoringConfig): Co
 export function componentsOf(metrics: AttemptMetrics, config: ScoringConfig): ScoreComponents {
   return {
     acceptanceCoverage: acceptanceCoverage(metrics, config),
-    firstPassCi: firstPassCi(metrics, config),
+    firstPassCi: clamp(metrics.ciScore),
     reviewerDefects: reviewerDefects(metrics, config),
     unnecessaryChurn: clamp(1 - metrics.churnPenalty),
     resourceCost: clamp(1 - metrics.resourceCost),
@@ -83,10 +85,6 @@ function acceptanceCoverage(metrics: AttemptMetrics, config: ScoringConfig): num
   return clamp(total / metrics.criteria.length);
 }
 
-function firstPassCi(metrics: AttemptMetrics, config: ScoringConfig): number {
-  return clamp(1 - metrics.remediationCycles * config.firstPassCi.penaltyPerRemediationCycle);
-}
-
 /** Severity is consequence, not effort: one critical outweighs many lows. */
 function reviewerDefects(metrics: AttemptMetrics, config: ScoringConfig): number {
   const penalty = metrics.findings.reduce(
@@ -99,7 +97,7 @@ function reviewerDefects(metrics: AttemptMetrics, config: ScoringConfig): number
 /** Small weight by design: better code is worth another five minutes. */
 function wallClock(metrics: AttemptMetrics, config: ScoringConfig): number {
   const target = config.wallClock.targetMinutesByRole[metrics.role];
-  if (!target || target <= 0) return 1;
+  if (!target || target <= 0) return 0.5;
   const overrun = Math.max(0, metrics.wallClockMinutes / target - 1);
   return clamp(1 - overrun * config.wallClock.penaltyPerTargetMultiple);
 }

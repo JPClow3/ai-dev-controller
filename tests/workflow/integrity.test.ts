@@ -213,6 +213,21 @@ describe('remediation carries a real plan', () => {
     repos.recordRemediationPlan(run.id, [{ file: 'src/a.ts', instruction: 'fix the guard' }]);
     expect(repos.pendingRemediation(run.id)).toHaveLength(1);
   });
+
+  it('counts dispatched remediation cycles rather than recovery transitions', () => {
+    const run = repos.claimIssueRun('UNI-9', 'portfolio')!;
+    repos.recordTasks(run.id, [
+      { id: 'original', owns: ['src/a.ts'] },
+      { id: 'remediation-1-0', owns: ['src/a.test.ts'] },
+    ]);
+    db.raw.prepare(
+      `INSERT INTO state_transitions (run_id, issue_id, from_state, to_state, reason)
+       VALUES (?, 'UNI-9', 'INTEGRATING', 'REMEDIATING', 'controller recovery noise'),
+              (?, 'UNI-9', 'FINAL_REVIEW', 'REMEDIATING', 'actual review')`,
+    ).run(run.id, run.id);
+
+    expect(repos.remediationCycles(run.id)).toBe(1);
+  });
 });
 
 describe('a work item carries its resolved project', () => {

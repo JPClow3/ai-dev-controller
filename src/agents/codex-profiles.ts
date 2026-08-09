@@ -1,4 +1,5 @@
 import { execa } from 'execa';
+import { ProviderQuotaExhaustedError, quotaResetAtFromOutput } from '../routing/quota.js';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,8 +89,10 @@ export function codexTransport(bin = process.env['CODEX_BIN'] ?? 'codex'): Struc
         }
         const detail = `${e.stderr ?? ''}\n${e.stdout ?? ''}`;
         if (/rate limit|quota|usage limit|429/i.test(detail)) {
-          throw new Error(
-            `Codex quota exhausted for profile ${alias.profile}. Routing should mark chatgpt EXHAUSTED.`,
+          throw new ProviderQuotaExhaustedError(
+            alias.provider,
+            quotaResetAtFromOutput(detail),
+            `profile ${alias.profile}`,
           );
         }
         if (/legacy `profile`|cannot be used while/i.test(detail)) {

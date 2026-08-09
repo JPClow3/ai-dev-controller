@@ -146,6 +146,65 @@ describe('adopting existing work still claims and records it', () => {
   });
 });
 
+describe('new parent worktrees start at the fetched base commit', () => {
+  it('fast-forwards the controller-owned parent before recording the workspace', async () => {
+    const freshBase = '08cf33de550eb8302c74abdd6733e8173a125b86';
+    const gitCalls: Array<{ cwd: string; args: string[] }> = [];
+    const gitRunner = vi.fn(async (cwd: string, args: string[]) => {
+      gitCalls.push({ cwd, args });
+      if (args[0] === 'rev-parse' && args[1] === '--verify') throw new Error('missing branch');
+      if (args[0] === 'rev-parse' && args[1] === 'origin/main') return freshBase;
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return freshBase;
+      return '';
+    });
+    const orca = createOrcaClient({
+      run: vi.fn(async (_binary: string, args: string[]) => {
+        if (args[0] === 'repo') {
+          return {
+            stdout: JSON.stringify({
+              id: 'x', ok: true, result: {
+                repos: [{
+                  id: 'r1', path: 'H:/Code/Pessoais/Portfolio', displayName: 'Portfolio',
+                  gitRemoteIdentity: { canonicalKey: 'github.com/JPClow3/Portfolio', remoteUrl: '' },
+                }],
+              },
+            }),
+            stderr: '',
+          };
+        }
+        if (args[0] === 'worktree' && args[1] === 'list') {
+          return {
+            stdout: JSON.stringify({ id: 'x', ok: true, result: { worktrees: [] } }),
+            stderr: '',
+          };
+        }
+        return {
+          stdout: JSON.stringify({
+            id: 'x', ok: true, result: {
+              worktree: {
+                id: 'new-wt', path: 'C:/fresh-parent', branch: 'refs/heads/JPClow3/ai-JP-7',
+              },
+            },
+          }),
+          stderr: '',
+        };
+      }),
+    });
+    const d = deps({ orca, git: createGit(gitRunner) });
+
+    const result = await dispatchNewIssue(d, {
+      issueId: 'JP-7', projectId: 'portfolio', role: 'routine_behavior', risk: 'low', slug: 'JPClow3/Portfolio',
+    });
+
+    expect(result.action).toBe('started');
+    expect(gitCalls).toContainEqual({
+      cwd: 'C:/fresh-parent',
+      args: ['merge', '--ff-only', freshBase],
+    });
+    expect(repos.getActiveRun('JP-7')?.baseSha).toBe(freshBase);
+  });
+});
+
 /**
  * Regression: providerPressures returned only the Orca-derived entry, so
  * "every provider EXHAUSTED" was true from a sample of one. A spent Codex

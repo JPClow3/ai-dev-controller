@@ -22,6 +22,16 @@ export function assertLabelWritable(label: AiLifecycleLabel): void {
   if (!CONTROLLER_WRITABLE_LABELS.includes(label)) throw new ForbiddenLabelWrite(label);
 }
 
+/** Fails startup before curation can persist only half of its Linear write. */
+export async function assertLifecycleLabelsExist(): Promise<void> {
+  const labels = await getLinearClient().issueLabels();
+  const present = new Set(labels.nodes.map((label) => label.name));
+  const missing = AI_LIFECYCLE_LABELS.filter((label) => !present.has(label));
+  if (missing.length > 0) {
+    throw new Error(`Linear workspace is missing required lifecycle label(s): ${missing.join(', ')}`);
+  }
+}
+
 /**
  * Sets exactly one lifecycle label, removing the others.
  *
@@ -43,6 +53,16 @@ export async function setAiLifecycleLabel(issueId: string, label: AiLifecycleLab
   if (!target) throw new Error(`Linear label "${label}" does not exist in this workspace`);
 
   await client.updateIssue(issue.id, { labelIds: [...keep, target.id] });
+}
+
+/** Clears controller lifecycle state after a human merge. */
+export async function clearAiLifecycleLabels(issueId: string): Promise<void> {
+  const client = getLinearClient();
+  const issue = await client.issue(issueId);
+  const existing = await issue.labels();
+  const lifecycle = new Set<string>(AI_LIFECYCLE_LABELS);
+  const keep = existing.nodes.filter((label) => !lifecycle.has(label.name)).map((label) => label.id);
+  await client.updateIssue(issue.id, { labelIds: keep });
 }
 
 export async function hasLabel(issueId: string, label: string): Promise<boolean> {

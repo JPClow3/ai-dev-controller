@@ -4,7 +4,7 @@
   "title": "Review",
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "issue_id", "stage", "reviewer", "criteria"],
+  "required": ["verdict", "issue_id", "stage", "reviewer", "findings", "criteria"],
   "properties": {
     "verdict": { "enum": ["approve", "request_changes", "escalate"] },
     "issue_id": { "type": "string" },

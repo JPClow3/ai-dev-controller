@@ -9,7 +9,7 @@ Ambitious but bounded. Each item maps to a module in `src/`.
 | 1 | Central project registry | `src/config/registry.ts` |
 | 2 | SQLite durable controller state | `src/state/db.ts`, `migrations/` |
 | 3 | Repository onboarding + knowledge-bootstrap PR | `src/knowledge/bootstrap.ts` |
-| 4 | Linear curator | `prompts/curator.md`, `src/linear/` |
+| 4 | Linear curator | `prompts/curator.md`, `src/curation/`, `src/linear/` |
 | 5 | `ai-ready` detection | `src/scheduler/loop.ts` |
 | 6 | Repository resolution | `src/config/registry.ts` |
 | 7 | Explicit `blockedBy` DAG processing | `src/scheduler/dag.ts` |
@@ -47,7 +47,8 @@ Ambitious but bounded. Each item maps to a module in `src/`.
 ## Suggested build order
 
 1. `state/` + migrations + `config/` loading - nothing works without durable state
-2. `linear/` read path + curator, ending at `ai-needs-context` / `WAITING_READY`
+2. `linear/` read path + curator, ending at `ai-needs-context` / `NEEDS_CONTEXT`
+   or `ai-curated` / `WAITING_READY`
 3. `registry.ts` resolution, `scheduler/dag.ts`, `scheduler/capacity.ts`
 4. `orca/client.ts` worktree creation only; verify against a throwaway repo
 5. planner + one worker end-to-end on a trivial issue, no review, no PR

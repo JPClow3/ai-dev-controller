@@ -1,5 +1,9 @@
 import type { Invoker } from './invoke.js';
 import type { RoutingConfig } from '../config/routing-schema.js';
+import {
+  ProviderQuotaExhaustedError,
+  isProviderQuotaExhausted,
+} from '../routing/quota.js';
 import type { AuthorshipSummary } from '../routing/types.js';
 import { selectReviewer } from '../routing/selector.js';
 
@@ -75,12 +79,38 @@ export function createAgents(invoker: Invoker, routing: RoutingConfig) {
      * The alias is chosen from the family least involved in authoring the
      * change, so a family never grades its own homework.
      */
-    reviewFinal: <T>(authorship: AuthorshipSummary, candidates: string[], packet: string) => {
-      const alias = selectReviewer(authorship, candidates, routing, 'least_involved_family');
-      return call<T>('finalReviewer', { alias, input: packet, timeoutMs: 300_000 }).then((data) => ({
-        alias,
-        data,
-      }));
+    reviewFinal: async <T>(authorship: AuthorshipSummary, candidates: string[], packet: string) => {
+      const remaining = [...candidates];
+      const failures: string[] = [];
+      const errors: unknown[] = [];
+      while (remaining.length > 0) {
+        const alias = selectReviewer(authorship, remaining, routing, 'least_involved_family');
+        try {
+          const data = await call<T>('finalReviewer', { alias, input: packet, timeoutMs: 300_000 });
+          return { alias, data };
+        } catch (error) {
+          errors.push(error);
+          failures.push(`${alias}: ${error instanceof Error ? error.message : String(error)}`);
+          remaining.splice(remaining.indexOf(alias), 1);
+        }
+      }
+      const quotaErrors = errors.filter(isProviderQuotaExhausted);
+      if (
+        quotaErrors.length === errors.length &&
+        quotaErrors.length > 0 &&
+        quotaErrors.every((error) => error.provider === quotaErrors[0]!.provider)
+      ) {
+        const resetAt = quotaErrors
+          .map((error) => error.resetAt)
+          .filter((value): value is Date => value !== null)
+          .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+        throw new ProviderQuotaExhaustedError(
+          quotaErrors[0]!.provider,
+          resetAt,
+          `all eligible final reviewers: ${failures.join(' | ')}`,
+        );
+      }
+      throw new Error(`Every eligible final reviewer failed. ${failures.join(' | ')}`);
     },
   };
 }

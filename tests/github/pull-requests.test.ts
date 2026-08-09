@@ -5,6 +5,7 @@ import {
   findPullRequestByBranch,
   listRecentlyMerged,
   issueIdFromBranch,
+  updatePullRequestBody,
 } from '../../src/github/pull-requests.js';
 import { readChecks } from '../../src/github/checks.js';
 
@@ -43,6 +44,14 @@ describe('the controller is structurally incapable of merging', () => {
 });
 
 describe('draft PR creation is idempotent', () => {
+  it('replaces the placeholder title when provenance is published', async () => {
+    const { calls, github } = fakeGh(() => null);
+    await updatePullRequestBody(github, 'o/r', 192, 'full body', 'UNI-142: Add filtering');
+    const edit = calls[0]!;
+    expect(edit).toContain('--title');
+    expect(edit).toContain('UNI-142: Add filtering');
+  });
+
   it('creates a draft PR when none exists', async () => {
     let created = false;
     const { calls, github } = fakeGh((args) => {
@@ -119,6 +128,21 @@ describe('draft PR creation is idempotent', () => {
     const { github } = fakeGh(() => []);
     expect(await findPullRequestByBranch(github, 'o/r', 'ai/none')).toBeNull();
   });
+
+  it('accepts the plain URL stdout emitted by gh pr create', async () => {
+    let created = false;
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[1] === 'create') {
+        created = true;
+        return 'https://github.com/o/r/pull/192';
+      }
+      return JSON.stringify(created ? [PR] : []);
+    });
+    const pr = await ensureDraftPullRequest(createGitHub(gh), {
+      slug: 'o/r', head: 'ai/x', base: 'main', title: 't', body: 'b',
+    });
+    expect(pr.number).toBe(192);
+  });
 });
 
 describe('merge detection drives the dependency wave', () => {
@@ -167,6 +191,25 @@ describe('checks', () => {
     expect(summary.allRequiredPassed).toBe(false);
   });
 
+  it('parses the status and conclusion shape emitted by the real gh CLI', async () => {
+    const { github } = fakeGh(() => ({
+      headRefOid: 'abc123',
+      statusCheckRollup: [
+        {
+          name: 'checks',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+          detailsUrl: 'https://github.com/o/r/actions/runs/31278274591/job/1',
+        },
+        { name: 'pages', status: 'COMPLETED', conclusion: 'SUCCESS' },
+      ],
+    }));
+    const summary = await readChecks(github, 'o/r', 192);
+    expect(summary.complete).toBe(true);
+    expect(summary.failed).toEqual(['checks']);
+    expect(summary.checks[0]?.githubRunId).toBe(31278274591);
+  });
+
   /**
    * Zero checks usually means the workflow never triggered - the exact failure
    * PR_DRAFT_OPEN exists to prevent. Treating it as success would let unbuilt
@@ -183,6 +226,14 @@ describe('checks', () => {
     const summary = await readChecks(github, 'o/r', 192, ['test']);
     expect(summary.allRequiredPassed).toBe(true);
     expect(summary.failed).toEqual([]);
+  });
+
+  it('waits when a configured required check has not appeared', async () => {
+    const { github } = fakeGh(() => rollup([['test', 'SUCCESS']]));
+    const summary = await readChecks(github, 'o/r', 192, ['test', 'build']);
+    expect(summary.complete).toBe(false);
+    expect(summary.allRequiredPassed).toBe(false);
+    expect(summary.pending).toContain('build (not reported)');
   });
 
   it('treats neutral and skipped as passing', async () => {

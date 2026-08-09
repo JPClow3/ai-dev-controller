@@ -29,12 +29,22 @@ export function createIntegrator(git: GitRunner = realGit) {
       const ordered = [...workers].sort((a, b) => a.order - b.order);
       const integrated: string[] = [];
       const conflicts: IntegrationResult['conflicts'] = [];
+      let integratedOrPresent = false;
 
       for (const worker of ordered) {
         for (const sha of worker.commits) {
+          // A restart or remediation pass sees the original worker commits
+          // again. `git cherry` compares patch identity, so a commit already
+          // cherry-picked under a different SHA is skipped idempotently.
+          const patchState = await git(parentPath, ['cherry', 'HEAD', sha]).catch(() => '');
+          if (patchState.trimStart().startsWith('-')) {
+            integratedOrPresent = true;
+            continue;
+          }
           try {
             await git(parentPath, ['cherry-pick', '-x', sha]);
             integrated.push(sha);
+            integratedOrPresent = true;
           } catch {
             const files = await conflictedFiles(git, parentPath);
             // Leave the tree clean so the next attempt starts from a known
@@ -46,7 +56,7 @@ export function createIntegrator(git: GitRunner = realGit) {
         }
       }
 
-      const headSha = integrated.length > 0 ? await git(parentPath, ['rev-parse', 'HEAD']) : null;
+      const headSha = integratedOrPresent ? await git(parentPath, ['rev-parse', 'HEAD']) : null;
       return { integrated, conflicts, headSha };
     },
   };

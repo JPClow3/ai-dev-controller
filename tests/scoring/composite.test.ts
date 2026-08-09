@@ -13,6 +13,7 @@ const perfect: AttemptMetrics = {
     { id: 'AC-2', verdict: 'PASS', evidence: 'src/bar.ts:30' },
   ],
   remediationCycles: 0,
+  ciScore: 1,
   findings: [],
   churnPenalty: 0,
   resourceCost: 0,
@@ -69,11 +70,9 @@ describe('composite score', () => {
     expect(evidenced.acceptanceCoverage).toBeCloseTo(1);
   });
 
-  it('penalises each remediation cycle', () => {
-    const one = componentsOf({ ...perfect, remediationCycles: 1 }, scoring).firstPassCi;
-    const two = componentsOf({ ...perfect, remediationCycles: 2 }, scoring).firstPassCi;
-    expect(one).toBeCloseTo(0.65);
-    expect(two).toBeCloseTo(0.3);
+  it('uses objective CI evidence independently of review remediation', () => {
+    expect(componentsOf({ ...perfect, remediationCycles: 2, ciScore: 1 }, scoring).firstPassCi).toBe(1);
+    expect(componentsOf({ ...perfect, remediationCycles: 0, ciScore: 0 }, scoring).firstPassCi).toBe(0);
   });
 
   it('weights a critical defect far above a naming nit', () => {
@@ -86,6 +85,10 @@ describe('composite score', () => {
   it('keeps latency a small factor - better code is worth five more minutes', () => {
     const slow = scoreAttempt({ ...perfect, wallClockMinutes: 30 }, scoring);
     expect(1 - slow.composite).toBeLessThan(0.06);
+  });
+
+  it('scores an unconfigured role neutrally instead of perfectly', () => {
+    expect(componentsOf({ ...perfect, role: 'routine_behavior' }, scoring).wallClock).toBe(0.5);
   });
 
   it('scores zero acceptance when there are no criteria to satisfy', () => {

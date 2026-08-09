@@ -82,6 +82,19 @@ describe('restart reconciliation', () => {
     expect(report.derivedState).toBe('CI');
   });
 
+  it('goes straight to final review on a no-CI repository after durable validation and push', () => {
+    const report = reconcileRun(
+      observed({
+        dbState: 'IMPLEMENTING',
+        ciTrigger: 'none',
+        localValidationPassed: true,
+        git: { branchExists: true, hasCommitsBeyondBase: true, branchPushed: true },
+      }),
+    );
+    expect(report.derivedState).toBe('FINAL_REVIEW');
+    expect(report.facts['localValidationPassed']).toBe(true);
+  });
+
   it('relaunches an agent that died mid-implementation', () => {
     const report = reconcileRun(
       observed({
@@ -91,6 +104,87 @@ describe('restart reconciliation', () => {
     );
     expect(report.action).toBe('relaunch');
     expect(report.reason).toMatch(/interrupted attempt/);
+  });
+
+  it('does not let checks from the previous pushed commit bypass an active remediation worker', () => {
+    const report = reconcileRun(observed({
+      dbState: 'IMPLEMENTING',
+        orca: { worktreeExists: true, implementationPending: true, agentRunning: true, agentSettled: false },
+      git: { branchExists: true, hasCommitsBeyondBase: true, branchPushed: true },
+      github: github({ checksComplete: true, requiredChecksPassed: true }),
+    }));
+
+    expect(report.derivedState).toBe('IMPLEMENTING');
+    expect(report.action).toBe('noop');
+  });
+
+  it('harvests a settled implementation before considering earlier green checks', () => {
+    const report = reconcileRun(observed({
+      dbState: 'IMPLEMENTING',
+      orca: { worktreeExists: true, implementationPending: true, agentRunning: false, agentSettled: true },
+      git: { branchExists: true, hasCommitsBeyondBase: true, branchPushed: true },
+      github: github({ checksComplete: true, requiredChecksPassed: true }),
+    }));
+
+    expect(report.derivedState).toBe('IMPLEMENTING');
+    expect(report.action).toBe('resume');
+  });
+
+  it('integrates a remediation commit before trusting checks from the previous PR head', () => {
+    const report = reconcileRun(observed({
+      dbState: 'INTEGRATING',
+      orca: { worktreeExists: true, agentRunning: false, agentSettled: true },
+      git: {
+        branchExists: true,
+        hasCommitsBeyondBase: true,
+        branchPushed: true,
+        integrationPending: true,
+      },
+      github: github({ checksComplete: true, requiredChecksPassed: true }),
+    }));
+
+    expect(report.derivedState).toBe('INTEGRATING');
+    expect(report.action).toBe('resume');
+    expect(report.reason).toMatch(/worker commit/i);
+  });
+
+  it('keeps planning when only the parent worktree exists and no worker work has started', () => {
+    const report = reconcileRun(
+      observed({
+        dbState: 'PLANNING',
+        orca: {
+          worktreeExists: true,
+          planningComplete: false,
+          agentRunning: false,
+          agentSettled: false,
+        },
+      }),
+    );
+
+    expect(report.derivedState).toBe('PLANNING');
+    expect(report.action).toBe('noop');
+  });
+
+  it('recovers planning only when persisted tasks prove every planning precondition', () => {
+    const report = reconcileRun(
+      observed({
+        dbState: 'PLANNING',
+        orca: {
+          worktreeExists: true,
+          planningComplete: true,
+          agentRunning: false,
+          agentSettled: false,
+        },
+      }),
+    );
+
+    expect(report.derivedState).toBe('IMPLEMENTING');
+    expect(report.action).toBe('advance');
+    expect(report.facts).toEqual({
+      planValidated: true,
+      ownershipSetsDisjoint: true,
+      worktreesCreated: true,
+    });
   });
 
   it('resumes rather than relaunching when the agent finished cleanly', () => {
@@ -103,6 +197,18 @@ describe('restart reconciliation', () => {
     expect(report.action).toBe('resume');
   });
 
+  it('leaves remediation to its persisted plan instead of treating the parent worktree as a dead worker', () => {
+    const report = reconcileRun(
+      observed({
+        dbState: 'REMEDIATING',
+        orca: { worktreeExists: true, agentRunning: false, agentSettled: true },
+      }),
+    );
+
+    expect(report.derivedState).toBe('REMEDIATING');
+    expect(report.action).toBe('noop');
+  });
+
   it('leaves a running agent alone', () => {
     const report = reconcileRun(
       observed({ orca: { worktreeExists: true, agentRunning: true, agentSettled: false } }),
@@ -110,11 +216,44 @@ describe('restart reconciliation', () => {
     expect(report.action).toBe('noop');
   });
 
+  it('preserves a human block until an explicit operator resume', () => {
+    const report = reconcileRun(observed({
+      dbState: 'BLOCKED_HUMAN',
+      orca: { worktreeExists: true, agentRunning: false, agentSettled: false },
+    }));
+    expect(report.derivedState).toBe('BLOCKED_HUMAN');
+    expect(report.action).toBe('noop');
+  });
+
   it('blocks for a human when the DB claims progress nothing external supports', () => {
-    const report = reconcileRun(observed({ dbState: 'INTEGRATING' }));
+    const report = reconcileRun(observed({
+      dbState: 'INTEGRATING',
+      orca: { worktreeExists: false, agentRunning: false, agentSettled: false },
+      git: { branchExists: false, hasCommitsBeyondBase: false, branchPushed: false },
+      github: github({ pullRequestNumber: null, checksComplete: false, requiredChecksPassed: false }),
+    }));
     expect(report.derivedState).toBe('BLOCKED_HUMAN');
     expect(report.action).toBe('block');
     expect(report.reason).toMatch(/no worktree, branch or pull request/);
+  });
+
+  it('does not claim all work disappeared when the parent worktree and branch still exist', () => {
+    const report = reconcileRun(observed({
+      dbState: 'INTEGRATING',
+      orca: { worktreeExists: true, agentRunning: false, agentSettled: true },
+      git: { branchExists: true, hasCommitsBeyondBase: false, branchPushed: false },
+      github: github({ pullRequestNumber: null, checksComplete: false, requiredChecksPassed: false }),
+    }));
+
+    expect(report.derivedState).toBe('INTEGRATING');
+    expect(report.action).toBe('noop');
+  });
+
+  it('does not treat unavailable systems as evidence that work disappeared', () => {
+    const report = reconcileRun(observed({ dbState: 'INTEGRATING' }));
+    expect(report.derivedState).toBe('INTEGRATING');
+    expect(report.action).toBe('noop');
+    expect(report.reason).toMatch(/could not be fully observed/);
   });
 
   it('does nothing for a queued run that never started', () => {

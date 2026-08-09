@@ -121,6 +121,21 @@ export async function createWorkerWorktree(
   return unwrapWorktree(await client.json(args));
 }
 
+/** Finds the deterministic child created by an interrupted dispatch. */
+export function findWorkerWorktree(
+  worktrees: OrcaWorktree[],
+  parentWorktreeId: string,
+  name: string,
+): OrcaWorktree | null {
+  const suffix = `/${name}`.toLowerCase();
+  return worktrees.find((worktree) => {
+    if (worktree.parentWorktreeId !== parentWorktreeId) return false;
+    if (worktree.displayName === name) return true;
+    if (worktree.branch?.toLowerCase().endsWith(suffix)) return true;
+    return worktree.path.replace(/\\/g, '/').toLowerCase().endsWith(suffix);
+  }) ?? null;
+}
+
 export async function removeWorktree(client: OrcaClient, selector: string, force = false): Promise<void> {
   const args = ['worktree', 'rm', '--worktree', selector];
   if (force) args.push('--force');
