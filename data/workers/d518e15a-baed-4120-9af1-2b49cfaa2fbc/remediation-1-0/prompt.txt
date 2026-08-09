@@ -1,0 +1,32 @@
+You are implementing task "remediation-1-0" for issue JP-9.
+
+Fix only the independently reviewed findings below; do not re-implement the original task.
+
+The new AC-1 test verifies only that affordability-related keys are absent; it does not assert the exact expected quote values or object equality required by AC-1. The implementation appears correct, but the test does not fully pin down the byte-for-byte contract.
+
+Fix only this. Do not re-implement the task.
+Verify with: Change the AC-1 test to assert quoteInk('custom_turn') equals exactly { actionType: 'custom_turn', ink: 2, label: 'Custom turn' }, then run npm run test.
+
+## You own ONLY these paths
+- packages/shared/types/__tests__/ink.test.ts
+
+Editing anything outside this set is a scope violation. If the task cannot
+be completed without touching another path, stop and say so.
+
+## Acceptance criteria this task advances
+- AC-5
+
+## Finishing
+This worktree's dependencies were installed for you before you started,
+so you can and should run the relevant tests before you finish.
+
+Leave your changes in the working tree. Do not commit, branch, merge or
+push — the controller commits the files you own, on the branch this
+worktree already has checked out, once you exit. Anything you change
+outside the paths above will NOT be committed and will be reported as a
+scope violation, so keep your edits inside them.
+
+Your last message becomes the commit description. Make it an accurate
+account of what you actually changed and what you verified.
+
+Base branch: main. Never merge, never push to the base branch.

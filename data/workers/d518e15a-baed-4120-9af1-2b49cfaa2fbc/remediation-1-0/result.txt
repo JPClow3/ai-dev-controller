@@ -1,0 +1,7 @@
+Confirmed the exact AC-1 assertion already exists in [ink.test.ts](C:/Users/lives/orca/workspaces/Lorebound/JPClow3-ai-JP-9-remediation-1-0/packages/shared/types/__tests__/ink.test.ts:32), so no change was necessary.
+
+Verification:
+
+- Direct runtime contract check passed.
+- `npm run test` could not execute because the sandbox blocked Vitest spawning esbuild with `spawn EPERM`.
+- Working tree remains clean.

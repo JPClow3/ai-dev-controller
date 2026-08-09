@@ -1,0 +1,3 @@
+Add optional balance-based affordability data to `InkQuote` and `quoteInk`, preserving the existing response shape when no balance is supplied. Cover surplus, exact, insufficient, zero, negative, and omitted-balance scenarios.
+
+Verified shared typecheck and six runtime assertions. Focused Vitest execution was blocked before collection by sandbox `spawn EPERM` in esbuild.

@@ -1,0 +1,7 @@
+Implement shared Ink affordability calculation and coverage.
+
+- Exported `InkAffordability` and `canAffordInk`.
+- Added normal, boundary, insufficient, and negative-balance tests.
+- `npm run typecheck` and direct runtime assertions passed.
+- Vitest/build were blocked by sandbox-level esbuild `spawn EPERM`.
+- Only the two owned files remain modified; `git diff --check` passes.

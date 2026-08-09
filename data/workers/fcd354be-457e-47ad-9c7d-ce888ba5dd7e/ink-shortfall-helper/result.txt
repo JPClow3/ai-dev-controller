@@ -1,0 +1,14 @@
+Exported `formatInkShortfall` from the shared Ink model:
+
+- `0` → `Enough Ink`
+- Non-zero values → `Need N more Ink`
+
+Added focused tests for zero and non-zero values.
+
+Verification:
+
+- Shared and repository typechecks passed.
+- Required runtime cases passed 2/2.
+- `git diff --check` passed.
+- Only the two authorized files changed.
+- Vitest/build were attempted but blocked before execution by sandbox `esbuild` spawn `EPERM`.
