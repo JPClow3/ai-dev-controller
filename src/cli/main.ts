@@ -2,18 +2,24 @@
 import 'dotenv/config';
 import { Command } from 'commander';
 import pc from 'picocolors';
+import { execa } from 'execa';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadControllerConfig } from '../config/load-config.js';
 import { openDatabase } from '../state/db.js';
+import { acquireControllerLock } from '../state/lock.js';
 import { createRepositories } from '../state/repositories.js';
 import { defaultPressure, pressureFromOrca } from '../routing/pressure.js';
+import { refreshRuntimePressure } from '../routing/quota.js';
 import { createOrcaClient, status as orcaStatus } from '../orca/client.js';
 import { planBootstrap } from '../knowledge/bootstrap.js';
 import { openBootstrapPullRequest } from '../knowledge/bootstrap-pr.js';
 import { realGit } from '../git/repository.js';
 import { createGitHub } from '../github/client.js';
-import { reconcileAll, applicable } from '../recovery/reconcile.js';
+import { applicable } from '../recovery/reconcile.js';
 import { buildController } from '../workflow/wire.js';
 import { runLoop } from '../workflow/runner.js';
+import { assertLifecycleLabelsExist } from '../linear/labels.js';
 
 /**
  * Operational escape hatch, not a daily tool. The normal loop is
@@ -23,6 +29,59 @@ const program = new Command();
 program.name('ai-dev').description('Local AI development controller').version('0.1.0');
 
 const ROOT = process.cwd();
+
+/**
+ * Whether the Codex profiles the routing table names can actually run.
+ *
+ * Checks one profile with a trivial prompt rather than trusting
+ * `codex login status`: the CLI reports a live ChatGPT session from a cached
+ * token whose refresh has been revoked server-side, so the only honest test is
+ * a real call.
+ */
+async function codexChecks(
+  config: ReturnType<typeof loadControllerConfig>,
+): Promise<Array<[string, boolean, string]>> {
+  const bin = process.env['CODEX_BIN'] ?? 'codex';
+  const profiles = new Set(
+    Object.values(config.routing.aliases)
+      .filter((a) => a.provider === 'chatgpt')
+      .map((a) => a.profile),
+  );
+  if (profiles.size === 0) return [];
+
+  const home = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
+  const missing = [...profiles].filter((p) => !existsSync(join(home, '.codex', `${p}.config.toml`)));
+  const results: Array<[string, boolean, string]> = [
+    [
+      'codex profiles',
+      missing.length === 0,
+      missing.length === 0 ? `${profiles.size} present` : `missing: ${missing.join(', ')}`,
+    ],
+  ];
+
+  const probe = [...profiles][0]!;
+  try {
+    const { exitCode, stderr, stdout } = await execa(
+      bin,
+      ['exec', '--profile', probe, '--sandbox', 'read-only', '--skip-git-repo-check', '-'],
+      { input: 'Reply with the single word OK.', timeout: 120_000, reject: false },
+    );
+    const output = `${stderr}\n${stdout}`;
+    const revoked = /refresh_token_invalidated|session has ended|log ?in again|401/i.test(output);
+    results.push([
+      'codex auth',
+      exitCode === 0 && !revoked,
+      revoked
+        ? 'ChatGPT session revoked — run `codex login`'
+        : exitCode === 0
+          ? `${probe} answered`
+          : output.trim().split('\n').slice(-1)[0]?.slice(0, 70) ?? `exit ${String(exitCode)}`,
+    ]);
+  } catch (err) {
+    results.push(['codex auth', false, (err as Error).message.slice(0, 70)]);
+  }
+  return results;
+}
 
 function withDb<T>(fn: (deps: { config: ReturnType<typeof loadControllerConfig>; repos: ReturnType<typeof createRepositories>; close: () => void }) => T): T {
   const config = loadControllerConfig(ROOT);
@@ -118,15 +177,27 @@ program
   .action(async () => {
     const config = loadControllerConfig(ROOT);
     let pressure = defaultPressure(config.routing);
+    let observed = {};
 
     // Real quota, read from Orca rather than assumed.
     try {
       const orca = createOrcaClient({ bin: config.global.orca.bin });
       const accounts = await orca.json<{ rateLimits?: Parameters<typeof pressureFromOrca>[0] }>(['account', 'list']);
-      pressure = { ...pressure, ...(pressureFromOrca(accounts.rateLimits ?? {}) as typeof pressure) };
+      observed = pressureFromOrca(accounts.rateLimits ?? {});
     } catch {
       console.log(pc.dim('(could not read live quota from Orca; showing defaults)\n'));
     }
+
+    const db = openDatabase(config.global.paths.database);
+    const persisted = createRepositories(db).activeProviderPressures();
+    db.close();
+    const disabled = (process.env['AI_DEV_DISABLED_PROVIDERS'] ?? '')
+      .split(',')
+      .map((provider) => provider.trim())
+      .filter(Boolean);
+    // Show the same effective state used by selectors: live telemetry first,
+    // then durable transport cooldowns and explicit operator overrides.
+    refreshRuntimePressure(pressure, config.routing, persisted, disabled, observed);
 
     console.log(pc.bold('provider pressure'));
     for (const p of Object.values(pressure)) {
@@ -263,41 +334,42 @@ program
   .command('recover')
   .description('reconcile interrupted runs against Orca, git, GitHub and Linear')
   .option('--apply', 'apply the reconciliation instead of reporting it')
-  .action((opts: { apply?: boolean }) =>
-    withDb(({ repos }) => {
+  .action(async (opts: { apply?: boolean }) => {
+    const config = loadControllerConfig(ROOT);
+    let release: (() => void) | undefined;
+    if (opts.apply) {
+      try {
+        release = acquireControllerLock(config.global.paths.database);
+      } catch (err) {
+        console.error(pc.red((err as Error).message));
+        process.exitCode = 1;
+        return;
+      }
+    }
+
+    const db = openDatabase(config.global.paths.database);
+    try {
+      const repos = createRepositories(db);
       const runs = repos.activeRuns();
       if (runs.length === 0) return void console.log(pc.dim('No incomplete runs.'));
 
-      // Observation is left unpopulated here: the CLI reports what the
-      // reconciler would conclude from controller state alone. The scheduler
-      // fills in Orca/git/GitHub before acting.
-      const reports = reconcileAll(
-        runs.map((r) => ({
-          runId: r.id,
-          issueId: r.issueId,
-          dbState: r.state,
-          ciTrigger: 'pull_request' as const,
-          orca: null,
-          git: null,
-          github: null,
-          linear: null,
-        })),
-      );
+      const { recoverReality } = buildController({ config, repos, writeToLinear: Boolean(opts.apply) });
+      const result = await recoverReality(Boolean(opts.apply));
 
-      for (const report of reports) {
+      for (const report of result.reports) {
         const flag = applicable(report) ? pc.yellow(report.action) : pc.dim(report.action);
         console.log(`${report.issueId.padEnd(12)} ${report.dbState.padEnd(18)} -> ${report.derivedState.padEnd(18)} ${flag}`);
         console.log(pc.dim(`  ${report.reason}`));
-        if (opts.apply && applicable(report)) {
-          repos.transitionRun(report.runId, report.derivedState, {
-            reason: `recovery: ${report.reason}`,
-            mechanicalFacts: report.facts,
-          });
-        }
+      }
+      for (const failure of result.observationErrors) {
+        console.log(pc.yellow(`  ${failure.system} unavailable for ${failure.runId}: ${failure.message}`));
       }
       if (!opts.apply) console.log(pc.dim('\nReport only; pass --apply to reconcile.'));
-    }),
-  );
+    } finally {
+      db.close();
+      release?.();
+    }
+  });
 
 program
   .command('doctor')
@@ -309,6 +381,15 @@ program
     checks.push(['config', true, `${Object.keys(config.registry.projects).length} project(s) registered`]);
     checks.push(['LINEAR_API_KEY', Boolean(process.env['LINEAR_API_KEY']), 'required for issue polling']);
 
+    if (process.env['LINEAR_API_KEY']) {
+      try {
+        await assertLifecycleLabelsExist();
+        checks.push(['Linear labels', true, 'all lifecycle labels present']);
+      } catch (err) {
+        checks.push(['Linear labels', false, (err as Error).message.slice(0, 120)]);
+      }
+    }
+
     try {
       const orca = createOrcaClient({ bin: config.global.orca.bin });
       const s = await orcaStatus(orca);
@@ -316,6 +397,12 @@ program
     } catch (err) {
       checks.push(['orca', false, (err as Error).message.slice(0, 80)]);
     }
+
+    // Reaches the provider, not just the binary. A revoked ChatGPT session
+    // leaves `codex login status` cheerfully reporting "Logged in using
+    // ChatGPT" while every actual call 401s — which cost a whole pilot run to
+    // discover from the inside.
+    for (const [name, ok, detail] of await codexChecks(config)) checks.push([name, ok, detail]);
 
     for (const [name, ok, detail] of checks) {
       console.log(`${ok ? pc.green('ok  ') : pc.red('FAIL')} ${name.padEnd(18)} ${pc.dim(detail)}`);
@@ -330,6 +417,27 @@ program
   .option('--dry-run', 'never write to Linear')
   .action(async (opts: { once?: boolean; dryRun?: boolean }) => {
     const config = loadControllerConfig(ROOT);
+
+    try {
+      await assertLifecycleLabelsExist();
+    } catch (err) {
+      console.error(pc.red(`Linear lifecycle-label check failed: ${(err as Error).message}`));
+      process.exitCode = 1;
+      return;
+    }
+
+    // Only the loop takes the lock. The read-only commands must stay usable
+    // while it runs — inspecting a live controller is the main reason they
+    // exist.
+    let release: () => void;
+    try {
+      release = acquireControllerLock(config.global.paths.database);
+    } catch (err) {
+      console.error(pc.red((err as Error).message));
+      process.exitCode = 1;
+      return;
+    }
+
     const db = openDatabase(config.global.paths.database);
     try {
       const repos = createRepositories(db);
@@ -339,13 +447,14 @@ program
       const last = reports[reports.length - 1];
       if (last) {
         console.log(
-          `ready ${last.readyIssues.length} | dispatched ${last.dispatched.length} | ` +
+          `curated ${last.curated} | ready ${last.readyIssues.length} | dispatched ${last.dispatched.length} | ` +
             `blocked ${last.blockedIssues.length} | needs-context ${last.needsContext.length}` +
             (last.throttled ? ' | THROTTLED' : ''),
         );
       }
     } finally {
       db.close();
+      release();
     }
   });
 

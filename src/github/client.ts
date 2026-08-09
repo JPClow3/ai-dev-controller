@@ -32,6 +32,11 @@ export function createGitHub(gh: GhRunner = realGh) {
   return {
     api,
 
+    /** Raw stdout for gh commands whose contract is text rather than JSON. */
+    text(args: string[]): Promise<string> {
+      return gh(args);
+    },
+
     /**
      * Refuses at the API boundary, so no code path can merge even by mistake.
      * Kept as a real method so the refusal is greppable.

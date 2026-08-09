@@ -46,12 +46,17 @@ export function assessReview(
   review: ReviewResult,
   blockingSeverities: Severity[],
 ): ReviewAssessment {
+  // Older schema revisions allowed an omitted empty findings array. Keep the
+  // assessment boundary total even when reading one of those persisted
+  // reviews; current invocations require both arrays in review.schema.json.
+  const findings = Array.isArray(review.findings) ? review.findings : [];
+  const criteria = Array.isArray(review.criteria) ? review.criteria : [];
   const blockingSet = new Set(blockingSeverities);
-  const blocking = review.findings.filter((f) => blockingSet.has(f.severity));
-  const nonBlocking = review.findings.filter((f) => !blockingSet.has(f.severity));
+  const blocking = findings.filter((f) => blockingSet.has(f.severity));
+  const nonBlocking = findings.filter((f) => !blockingSet.has(f.severity));
 
-  const unsatisfied = review.criteria.filter((c) => c.status === 'unsatisfied').map((c) => c.id);
-  const uncertain = review.criteria.filter((c) => c.status === 'uncertain').map((c) => c.id);
+  const unsatisfied = criteria.filter((c) => c.status === 'unsatisfied').map((c) => c.id);
+  const uncertain = criteria.filter((c) => c.status === 'uncertain').map((c) => c.id);
 
   const inconsistencies: string[] = [];
   if (review.verdict === 'approve' && blocking.length > 0) {
@@ -61,6 +66,9 @@ export function assessReview(
   }
   if (review.verdict === 'approve' && unsatisfied.length > 0) {
     inconsistencies.push(`approved with unsatisfied criteria: ${unsatisfied.join(', ')}`);
+  }
+  if (review.verdict === 'approve' && uncertain.length > 0) {
+    inconsistencies.push(`approved with uncertain criteria: ${uncertain.join(', ')}`);
   }
   if (review.verdict === 'escalate' && !review.escalation_reason) {
     inconsistencies.push('escalated without a reason');
@@ -76,7 +84,8 @@ export function assessReview(
     nonBlocking,
     unsatisfiedCriteria: unsatisfied,
     uncertainCriteria: uncertain,
-    clearsForPr: verdict === 'approve' && blocking.length === 0 && unsatisfied.length === 0,
+    clearsForPr:
+      verdict === 'approve' && blocking.length === 0 && unsatisfied.length === 0 && uncertain.length === 0,
     inconsistencies,
   };
 }
@@ -90,6 +99,23 @@ export function assessReview(
 export function unaddressedCriteria(review: ReviewResult, expected: string[]): string[] {
   const seen = new Set(review.criteria.map((c) => c.id));
   return expected.filter((id) => !seen.has(id));
+}
+
+/** Makes reviewer silence explicit before the result is persisted or used. */
+export function withUnaddressedCriteria(review: ReviewResult, expected: string[]): ReviewResult {
+  const missing = unaddressedCriteria(review, expected);
+  if (missing.length === 0) return review;
+  return {
+    ...review,
+    criteria: [
+      ...review.criteria,
+      ...missing.map((id) => ({
+        id,
+        status: 'uncertain' as const,
+        evidence: 'Reviewer did not address this acceptance criterion.',
+      })),
+    ],
+  };
 }
 
 /** Non-blocking findings become PR comments rather than remediation work. */

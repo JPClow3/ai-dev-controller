@@ -1,12 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import { createOrcaClient } from '../../src/orca/client.js';
 import {
   createParentWorktree,
   createWorkerWorktree,
   unwrapWorktree,
   branchNameFor,
+  findWorkerWorktree,
 } from '../../src/orca/worktrees.js';
-import { launchWorker, unwrapTerminal, workerCommand } from '../../src/orca/terminals.js';
+import {
+  launchWorker,
+  unwrapTerminal,
+  workerCommand,
+  workerScript,
+  readWorkerExit,
+  classifyWorkerLiveness,
+} from '../../src/orca/terminals.js';
+
+/** Controller-owned scratch directory, deliberately outside any worktree. */
+const CONTROL = 'C:/ai-dev/data/workers/run-1/api';
 
 function fakeCli(result: unknown) {
   const calls: string[][] = [];
@@ -68,8 +80,8 @@ describe('Orca wraps single objects under a named key', () => {
     const { client } = fakeCli({ terminal: { handle: 'term_abc', title: 'JP-7/api' } });
     const term = await launchWorker(client, {
       worktreeSelector: 'id:w',
-      profile: 'gpt-luna-high',
       title: 'JP-7/api',
+      controlDir: 'C:/ctl/JP-7/api',
     });
     expect(term.handle).toBe('term_abc');
   });
@@ -85,6 +97,17 @@ describe('Orca wraps single objects under a named key', () => {
  * made Orca exit 1. The parent link already expresses the relationship.
  */
 describe('worker worktree names carry no path separators', () => {
+  it('adopts the deterministic child after a crash instead of creating a duplicate', () => {
+    const existing = {
+      id: 'repo::C:/wt/ai-JP-7-api',
+      path: 'C:/wt/ai-JP-7-api',
+      displayName: 'ai-JP-7-api',
+      parentWorktreeId: 'repo::C:/wt/ai-JP-7',
+    };
+    expect(findWorkerWorktree([existing], existing.parentWorktreeId, 'ai-JP-7-api')).toBe(existing);
+    expect(findWorkerWorktree([existing], existing.parentWorktreeId, 'ai-JP-7-web')).toBeNull();
+  });
+
   it('flattens the parent branch into the child name', () => {
     const parentBranch = 'ai/JP-7-routine-behavior';
     const name = `${parentBranch.replace(/\//g, '-')}-github-fallback-tests`;
@@ -116,41 +139,124 @@ describe('worker launch needs no GUI-registered agent', () => {
    * make the pipeline un-runnable from a script.
    */
   it('runs codex exec as a plain command', () => {
-    const cmd = workerCommand('gpt-luna-high');
-    expect(cmd).toContain('codex exec');
-    expect(cmd).toContain('--profile gpt-luna-high');
-    expect(cmd).toContain('--sandbox workspace-write');
+    const script = workerScript('gpt-luna-high', CONTROL);
+    expect(script).toContain('codex exec');
+    expect(script).toContain('--profile gpt-luna-high');
+    expect(script).toContain('--sandbox workspace-write');
+  });
+
+  /**
+   * Regression for the defect that silently killed every worker: Orca
+   * terminals are PowerShell, and PowerShell answers `<` with "The '<'
+   * operator is reserved for future use." The command failed before codex was
+   * ever invoked, and nothing in the controller could see it.
+   */
+  it('pipes the prompt instead of redirecting it', () => {
+    const script = workerScript('x', CONTROL);
+    expect(script).not.toMatch(/<\s*'?\S*prompt/);
+    expect(script).toContain(`Get-Content -Raw '${join(CONTROL, 'prompt.txt')}' |`);
   });
 
   it('reads the prompt from a file, not argv', () => {
     // The prompt plus schema exceeds the Windows command-line limit.
-    expect(workerCommand('x')).toMatch(/- < \.ai-worker-prompt\.txt/);
+    expect(workerScript('x', CONTROL)).toContain(join(CONTROL, 'prompt.txt'));
   });
 
   it('captures only the final message', () => {
-    expect(workerCommand('x')).toContain('--output-last-message .ai-worker-result.txt');
+    expect(workerScript('x', CONTROL)).toContain(`--output-last-message '${join(CONTROL, 'result.txt')}'`);
+  });
+
+  /**
+   * The controller's scratch used to sit in the worktree, one `git add -A`
+   * away from being committed into the pull request.
+   */
+  it('keeps every control file out of the repository', () => {
+    const script = workerScript('x', CONTROL);
+    for (const name of ['prompt.txt', 'result.txt', 'exit.txt']) {
+      expect(script).toContain(join(CONTROL, name));
+    }
+    expect(script).not.toMatch(/(^|\s)'?\.\//m);
+  });
+
+  /**
+   * Orca terminals are long-lived shells: `terminal list` reports no status
+   * and no exit code, so completion has to be recorded by the worker itself.
+   */
+  it('records its own exit status where the controller can read it', () => {
+    const script = workerScript('x', CONTROL);
+    expect(script).toContain('$LASTEXITCODE');
+    expect(script).toContain(`Set-Content -Path '${join(CONTROL, 'exit.txt')}'`);
+  });
+
+  it('launches the script through an explicit pwsh, not the ambient shell', () => {
+    expect(workerCommand(CONTROL)).toBe(
+      `pwsh -NoProfile -ExecutionPolicy Bypass -File '${join(CONTROL, 'run.ps1')}'`,
+    );
+  });
+
+  /**
+   * The first live worker refused to run tests and said why: "node_modules is
+   * absent, so the focused script cannot find Vitest (and installing
+   * dependencies would modify paths outside my ownership)". Both halves were
+   * correct, so the controller prepares the worktree instead.
+   */
+  it('runs the repository setup before the agent, when one is declared', () => {
+    const script = workerScript('x', CONTROL, { setupCommand: 'npm ci' });
+    expect(script.indexOf('npm ci')).toBeLessThan(script.indexOf('codex exec'));
+  });
+
+  it('omits setup entirely when the repository declares none', () => {
+    expect(workerScript('x', CONTROL)).not.toContain('ai-dev worker: ');
+  });
+
+  /**
+   * Granting the git directory did let the worker commit, and on Windows it
+   * also pushed codex onto an elevated sandbox helper that cannot run
+   * unattended (ERROR_CANCELLED 1223 from an unanswerable UAC prompt). The
+   * controller commits instead, so the worker needs no widening at all.
+   */
+  it('widens the sandbox for nothing', () => {
+    expect(workerScript('x', CONTROL)).not.toContain('--add-dir');
+    expect(workerScript('x', CONTROL, { setupCommand: 'npm ci' })).not.toContain('--add-dir');
+  });
+
+  /**
+   * The elevated Windows sandbox launches its helper through ShellExecuteExW,
+   * which raises a UAC prompt. Unattended it comes back ERROR_CANCELLED
+   * (1223) and the worker cannot read or write a single file.
+   */
+  it('never asks for a UAC prompt nobody can answer', () => {
+    expect(workerScript('x', CONTROL)).toContain('windows.sandbox="unelevated"');
+  });
+
+  it('treats a missing sentinel as still running, never as success', () => {
+    expect(readWorkerExit(null)).toBeNull();
+    expect(readWorkerExit('0')).toBe(0);
+    expect(readWorkerExit('1\n')).toBe(1);
+    // Unparseable is a failure, not a pass.
+    expect(readWorkerExit('what')).toBe(1);
+  });
+
+  it('classifies a missing exit with a recent heartbeat as running', () => {
+    expect(classifyWorkerLiveness(null, 95_000, 100_000, 10_000)).toEqual({
+      state: 'running',
+      exitCode: null,
+    });
+  });
+
+  it('classifies a stale or absent heartbeat as an interrupted worker', () => {
+    expect(classifyWorkerLiveness(null, 80_000, 100_000, 10_000).state).toBe('interrupted');
+    expect(classifyWorkerLiveness(null, null, 100_000, 10_000).state).toBe('interrupted');
+  });
+
+  it('lets the durable exit sentinel outrank heartbeat age', () => {
+    expect(classifyWorkerLiveness('0', 1, 100_000, 10_000)).toEqual({ state: 'settled', exitCode: 0 });
+    expect(classifyWorkerLiveness('7', 99_999, 100_000, 10_000)).toEqual({ state: 'settled', exitCode: 7 });
   });
 
   it('never passes --agent', async () => {
     const { calls, client } = fakeCli({ worktree: { id: 'w', path: 'p' } });
     await createParentWorktree(client, { repoSelector: 'id:r', name: 'ai/x', baseBranch: 'main' });
     expect(calls[0]).not.toContain('--agent');
-  });
-});
-
-describe('branch naming', () => {
-  it('is git-safe for a realistic issue title', () => {
-    const name = branchNameFor('ai/', 'JP-7', 'Add unit tests for the GitHub activity fallback path');
-    expect(name).toMatch(/^ai\/JP-7-[a-z0-9-]+$/);
-  });
-
-  it('survives punctuation and unicode without producing an invalid ref', () => {
-    for (const title of ['Fix: the *thing* — now?!', 'ação e configuração', '///', '   ']) {
-      const name = branchNameFor('ai/', 'JP-9', title);
-      expect(name.startsWith('ai/JP-9')).toBe(true);
-      expect(name).not.toContain('//');
-      expect(name).not.toMatch(/[ *?~^:[\]\\]/);
-      expect(name.endsWith('-')).toBe(false);
-    }
   });
 });

@@ -1,6 +1,6 @@
 allowBuilds:
-  better-sqlite3: set this to true or false
-  esbuild: set this to true or false
+  better-sqlite3: false
+  esbuild: false
 # pnpm blocks dependency install scripts by default and treats un-triaged ones
 # as an error. Both of these are triaged and deliberately skipped:
 #

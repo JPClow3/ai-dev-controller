@@ -121,6 +121,21 @@ export async function createWorkerWorktree(
   return unwrapWorktree(await client.json(args));
 }
 
+/** Finds the deterministic child created by an interrupted dispatch. */
+export function findWorkerWorktree(
+  worktrees: OrcaWorktree[],
+  parentWorktreeId: string,
+  name: string,
+): OrcaWorktree | null {
+  const suffix = `/${name}`.toLowerCase();
+  return worktrees.find((worktree) => {
+    if (worktree.parentWorktreeId !== parentWorktreeId) return false;
+    if (worktree.displayName === name) return true;
+    if (worktree.branch?.toLowerCase().endsWith(suffix)) return true;
+    return worktree.path.replace(/\\/g, '/').toLowerCase().endsWith(suffix);
+  }) ?? null;
+}
+
 export async function removeWorktree(client: OrcaClient, selector: string, force = false): Promise<void> {
   const args = ['worktree', 'rm', '--worktree', selector];
   if (force) args.push('--force');
@@ -158,13 +173,33 @@ export function findRepoBySlug(repos: OrcaRepo[], slug: string): OrcaRepo | null
   );
 }
 
-/** `ai/UNI-142-add-filtering` — the branch naming the design fixes. */
-export function branchNameFor(prefix: string, issueId: string, slug: string): string {
-  const clean = slug
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40)
-    .replace(/-+$/, '');
-  return `${prefix}${issueId}${clean ? `-${clean}` : ''}`;
+/**
+ * The filesystem path an Orca worktree id points at.
+ *
+ * Orca ids are `<repoId>::<absolute path>`, and the path half is the only
+ * place the controller can do git work. Using the registry's repository path
+ * instead is a correctness bug, not a shortcut: that clone has the BASE branch
+ * checked out, so cherry-picking into it lands worker commits on `main`, and
+ * validating it validates code the run never produced.
+ */
+export function worktreePathFromId(worktreeId: string): string {
+  const separator = worktreeId.indexOf('::');
+  const path = separator === -1 ? '' : worktreeId.slice(separator + 2);
+  if (!path) throw new Error(`Orca worktree id "${worktreeId}" carries no path`);
+  return path;
+}
+
+/**
+ * The one branch name an issue gets.
+ *
+ * A pure function of the issue id, with no slug. Two call sites used to
+ * append different suffixes for the same run — dispatch used the routing role
+ * (`ai/JP-8-routine-behavior`), provisioning used the literal `work`
+ * (`ai/JP-8-work`) — so when provisioning ran against a dispatched run it
+ * looked for a worktree that did not exist under that name and created a
+ * second one. An issue maps to one branch; the name must not depend on which
+ * code path asks for it.
+ */
+export function branchNameFor(prefix: string, issueId: string): string {
+  return `${prefix}${issueId}`;
 }

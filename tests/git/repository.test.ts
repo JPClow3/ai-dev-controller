@@ -16,6 +16,15 @@ function fakeGit(handler: (args: string[]) => string | Promise<string>) {
   return { calls, git: createGit(runner), runner };
 }
 
+describe('patch presence', () => {
+  it('detects whether a worker patch is already present on the parent', async () => {
+    const { calls, git } = fakeGit((args) => args[0] === 'cherry' ? '- abc123' : '');
+
+    await expect(git.patchPresent('C:/parent', 'abc123')).resolves.toBe(true);
+    expect(calls).toContainEqual(['cherry', 'HEAD', 'abc123']);
+  });
+});
+
 describe('push guard is an allow-list, not a deny-list', () => {
   it('accepts a properly prefixed controller branch', () => {
     expect(() => assertControllerBranch('ai/UNI-142-thing', 'ai/', 'main')).not.toThrow();
@@ -112,6 +121,14 @@ describe('commit and diff parsing', () => {
     ]);
   });
 
+  it('diffs the exact worker-attempt commit interval', async () => {
+    const { calls, git } = fakeGit(() => '3\t1\tsrc/retry.ts');
+    expect(await git.changedFilesBetween('/repo', 'attempt-base', 'attempt-head')).toEqual([
+      { path: 'src/retry.ts', insertions: 3, deletions: 1 },
+    ]);
+    expect(calls[0]).toEqual(['diff', '--numstat', 'attempt-base..attempt-head']);
+  });
+
   it('reports a branch as absent only after checking both local and remote', async () => {
     const tried: string[] = [];
     const runner = vi.fn(async (_cwd: string, args: string[]) => {
@@ -143,6 +160,22 @@ describe('worker integration', () => {
     expect(result.integrated).toEqual(['c1', 'c2', 'c3']);
     const picks = calls.filter((c) => c[0] === 'cherry-pick' && c[1] === '-x').map((c) => c[2]);
     expect(picks).toEqual(['c1', 'c2', 'c3']);
+  });
+
+  it('skips a patch-equivalent worker commit that was already integrated before a restart', async () => {
+    const runner = vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === 'cherry') return `- ${args[2]}`;
+      if (args[0] === 'rev-parse') return 'PARENT_HEAD';
+      return '';
+    });
+
+    const result = await createIntegrator(runner).integrate('/parent', [
+      { taskKey: 'api', branch: 'a', order: 1, commits: ['c1'] },
+    ]);
+
+    expect(result.conflicts).toEqual([]);
+    expect(result.headSha).toBe('PARENT_HEAD');
+    expect(runner).not.toHaveBeenCalledWith('/parent', ['cherry-pick', '-x', 'c1']);
   });
 
   /** Conflicts are resolved in the parent, never by letting workers edit each

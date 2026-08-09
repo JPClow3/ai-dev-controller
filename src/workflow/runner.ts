@@ -12,6 +12,7 @@ export interface TickReport {
   startedAt: string;
   durationMs: number;
   reconciled: number;
+  curated: number;
   readyIssues: string[];
   blockedIssues: Array<{ identifier: string; waitingOn: string[] }>;
   cycles: string[][];
@@ -30,6 +31,8 @@ export interface RunnerDeps {
   repos: ControllerRepositories;
 
   reconcile: () => Promise<number>;
+  /** Rough `ai-curate` issues processed before implementation scheduling. */
+  curateIssues: () => Promise<number>;
   /** Issues carrying `ai-ready`, plus their explicit blockers. */
   fetchReadyIssues: () => Promise<
     Array<{
@@ -39,6 +42,7 @@ export interface RunnerDeps {
       description: string;
       labels: string[];
       blockedBy: string[];
+      url?: string;
     }>
   >;
   /** Merged PRs, which is the only thing that satisfies a dependency. */
@@ -59,11 +63,12 @@ export interface RunnerDeps {
  * Order matters and is not arbitrary:
  *   1. reconcile   — the DB is memory, not truth; re-derive reality first
  *   2. merges      — a merge is the only thing that unblocks downstream work
- *   3. ai-ready    — the human gate, read but never written
- *   4. waves       — recomputed from real merge state every tick
- *   5. capacity    — hard limits
- *   6. priority    — finish things before starting things
- *   7. dispatch
+ *   3. curation    — improve rough issues, stopping before the human gate
+ *   4. ai-ready    — the human gate, read but never written
+ *   5. waves       — recomputed from real merge state every tick
+ *   6. capacity    — hard limits
+ *   7. priority    — finish things before starting things
+ *   8. dispatch
  */
 export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
   const started = Date.now();
@@ -74,6 +79,8 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
   // A merged PR satisfies blockers. Nothing else does.
   const merged = await deps.syncMergedPullRequests();
   for (const issueId of merged) deps.repos.markDependencySatisfiedByMerge(issueId);
+
+  const curated = await deps.curateIssues();
 
   const ready = await deps.fetchReadyIssues();
   const needsContext: string[] = [];
@@ -110,11 +117,17 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
         routingProfile: entry.routingProfile,
       });
     }
+    // Criteria are parsed here, deterministically, rather than left for the
+    // curator. Nothing was populating them: the review packet arrived with an
+    // empty criteria list and the PR body rendered an empty checklist, so the
+    // one thing a reviewer is meant to check against was never present.
     deps.repos.upsertIssue({
       id: issue.identifier,
       projectId: resolution.projectId,
       title: issue.title ?? null,
       body: issue.description,
+      acceptanceCriteria: parseAcceptanceCriteria(issue.description ?? ''),
+      url: issue.url ?? null,
     });
     deps.repos.setDependencies(issue.identifier, issue.blockedBy);
     resolvedProjects.set(issue.identifier, resolution.projectId);
@@ -198,6 +211,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
     startedAt,
     durationMs: Date.now() - started,
     reconciled,
+    curated,
     readyIssues: wave.issues,
     blockedIssues: wave.blocked,
     cycles,
@@ -244,7 +258,7 @@ export async function runLoop(deps: RunnerDeps, options: LoopOptions = {}): Prom
       const report = await runSchedulerTick(deps);
       reports.push(report);
       log.info(
-        `tick: ${report.dispatched.length} dispatched, ${report.readyIssues.length} ready, ` +
+        `tick: ${report.curated} curated, ${report.dispatched.length} dispatched, ${report.readyIssues.length} ready, ` +
           `${report.blockedIssues.length} blocked${report.throttled ? ', THROTTLED' : ''}`,
       );
     } catch (err) {
@@ -266,4 +280,28 @@ export async function runLoop(deps: RunnerDeps, options: LoopOptions = {}): Prom
     options.signal?.addEventListener('abort', stop, { once: true });
     process.once('SIGINT', stop);
   });
+}
+
+/**
+ * Acceptance criteria, read from the issue body.
+ *
+ * The convention the curator prompt already produces and the pilot issues
+ * already use: a line whose first token is an `AC-<n>` label. Deliberately
+ * deterministic — criteria are the yardstick the reviewer is graded against,
+ * so they must not be re-invented by a model on every read.
+ */
+export function parseAcceptanceCriteria(body: string): Array<{ id: string; statement: string }> {
+  const found: Array<{ id: string; statement: string }> = [];
+  const seen = new Set<string>();
+
+  for (const line of body.split(/\r?\n/)) {
+    // Tolerates "- [ ] AC-1: ...", "* AC-2 — ...", "AC-3. ..."
+    const match = /^\s*(?:[-*]\s*)?(?:\[[ xX]?\]\s*)?(AC-\d+)\s*[:.—-]?\s*(.+)$/.exec(line);
+    const id = match?.[1];
+    const statement = match?.[2]?.trim();
+    if (!id || !statement || seen.has(id)) continue;
+    seen.add(id);
+    found.push({ id, statement });
+  }
+  return found;
 }

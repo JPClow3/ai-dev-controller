@@ -34,6 +34,39 @@ export interface TransitionEvidence {
 }
 
 /**
+ * Authoritative recovery may skip stale internal states, but only when a
+ * stronger external fact proves the skipped outcome. This is intentionally
+ * much narrower than the ordinary state machine.
+ */
+export function canRecoverAuthoritatively(
+  from: WorkflowState,
+  to: WorkflowState,
+  facts: Record<string, boolean>,
+): boolean {
+  if (from === to || isTerminal(from)) return false;
+  // A human merge is terminal external truth, even if the controller was
+  // previously waiting on that same human for another reason.
+  if (to === 'MERGED') return facts['mergedByHuman'] === true;
+  if (from === 'BLOCKED_HUMAN') return false;
+  // Passing checks on the run's own PR prove the pushed artifact reached the
+  // final-review boundary even when SQLite missed earlier writes.
+  if (to === 'FINAL_REVIEW') {
+    const validationPassed = facts['localValidationPassed'] === true;
+    const ciPassed = facts['requiredCiPassed'] === true && facts['pullRequestExists'] === true;
+    return validationPassed && (ciPassed || facts['branchPushed'] === true);
+  }
+  if (to === 'REMEDIATING') {
+    return facts['localValidationPassed'] === true
+      && facts['requiredCiFailed'] === true
+      && facts['pullRequestExists'] === true;
+  }
+  if (to === 'PR_DRAFT_OPEN' || to === 'CI') {
+    return facts['branchPushed'] === true && facts['localValidationPassed'] === true;
+  }
+  return false;
+}
+
+/**
  * Mechanical preconditions, independently verified before entry.
  *
  * `PR_READY` demands `requiredCiPassed` — which is why the CI trigger mode

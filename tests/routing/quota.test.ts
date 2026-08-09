@@ -1,0 +1,76 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  applyQuotaCooldown,
+  ProviderQuotaExhaustedError,
+  quotaResetAtFromOutput,
+  refreshRuntimePressure,
+} from '../../src/routing/quota.js';
+import { defaultPressure } from '../../src/routing/pressure.js';
+import { loadControllerConfig } from '../../src/config/load-config.js';
+
+const routing = loadControllerConfig(process.cwd()).routing;
+
+describe('Codex quota exhaustion', () => {
+  it('extracts the provider reset time from Codex CLI output', () => {
+    const resetAt = quotaResetAtFromOutput(
+      "You've hit your usage limit. Purchase more credits or try again at Aug 15th, 2026 7:14 PM.",
+    );
+
+    expect(resetAt).not.toBeNull();
+    expect(resetAt?.getFullYear()).toBe(2026);
+    expect(resetAt?.getMonth()).toBe(7);
+    expect(resetAt?.getDate()).toBe(15);
+    expect(resetAt?.getHours()).toBe(19);
+    expect(resetAt?.getMinutes()).toBe(14);
+  });
+
+  it('keeps provider and reset metadata on the typed error', () => {
+    const resetAt = new Date('2026-08-15T22:14:00.000Z');
+    const error = new ProviderQuotaExhaustedError('chatgpt', resetAt, 'gpt-terra-high');
+
+    expect(error.provider).toBe('chatgpt');
+    expect(error.resetAt).toEqual(resetAt);
+    expect(error.message).toContain('gpt-terra-high');
+  });
+
+  it('persists the cooldown and immediately removes the provider from routing', () => {
+    const pressure = defaultPressure(routing);
+    const setProviderPressure = vi.fn();
+    const resetAt = new Date('2026-08-15T22:14:00.000Z');
+
+    applyQuotaCooldown(
+      { setProviderPressure },
+      pressure,
+      new ProviderQuotaExhaustedError('chatgpt', resetAt, 'reviewers'),
+      new Date('2026-08-09T02:40:00.000Z'),
+    );
+
+    expect(pressure['chatgpt']).toMatchObject({
+      pressure: 'EXHAUSTED',
+      source: 'transport_quota',
+      remainingAllowance: 0,
+    });
+    expect(setProviderPressure).toHaveBeenCalledWith(
+      'chatgpt',
+      expect.objectContaining({ resetAt: resetAt.toISOString() }),
+    );
+  });
+
+  it('restores a fresh map from durable cooldowns after a restart', () => {
+    const pressure = defaultPressure(routing);
+    refreshRuntimePressure(pressure, routing, [
+      {
+        provider: 'chatgpt',
+        pressure: 'EXHAUSTED',
+        remainingAllowance: 0,
+        source: 'transport_quota',
+        manualOverride: false,
+        resetAt: '2026-08-15T22:14:00.000Z',
+      },
+    ], ['ollama']);
+
+    expect(pressure['chatgpt']?.pressure).toBe('EXHAUSTED');
+    expect(pressure['ollama']?.pressure).toBe('EXHAUSTED');
+    expect(pressure['ollama_local']?.pressure).not.toBe('EXHAUSTED');
+  });
+});

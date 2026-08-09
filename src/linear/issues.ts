@@ -49,17 +49,22 @@ export async function listIssuesByLabel(label: string): Promise<LinearIssueSumma
 export async function getIssueContract(identifier: string): Promise<LinearIssueContract> {
   const client = getLinearClient();
   const issue = await client.issue(identifier);
-  const [labels, project, relations] = await Promise.all([
+  const [labels, project, inverseRelations] = await Promise.all([
     issue.labels(),
     issue.project,
-    issue.relations(),
+    // `inverseRelations`, not `relations`. Linear stores one row per pair: the
+    // blocking issue owns a `blocks` relation pointing at the blocked one.
+    // Reading `relations` therefore yields the issues THIS one blocks, and
+    // recording those as its blockers inverted the entire dependency graph —
+    // the scheduler ran dependents first and held their prerequisites.
+    issue.inverseRelations(),
   ]);
 
   const blockedBy: string[] = [];
-  for (const relation of relations.nodes) {
+  for (const relation of inverseRelations.nodes) {
     if (relation.type !== 'blocks') continue;
-    const related = await relation.relatedIssue;
-    if (related) blockedBy.push(related.identifier);
+    const blocker = await relation.issue;
+    if (blocker) blockedBy.push(blocker.identifier);
   }
 
   return {
@@ -81,6 +86,16 @@ export async function updateIssueBody(identifier: string, body: string): Promise
   const client = getLinearClient();
   const issue = await client.issue(identifier);
   await client.updateIssue(issue.id, { description: body });
+}
+
+/** Writes the full curator result back to Linear as one coherent contract. */
+export async function updateIssueContract(
+  identifier: string,
+  contract: { title: string; body: string },
+): Promise<void> {
+  const client = getLinearClient();
+  const issue = await client.issue(identifier);
+  await client.updateIssue(issue.id, { title: contract.title, description: contract.body });
 }
 
 export async function commentOnIssue(identifier: string, body: string): Promise<string> {

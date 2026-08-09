@@ -14,7 +14,12 @@
 #   branch_push   CI runs on any branch push; a PR is not needed to get checks.
 #   none          no workflows at all. Local validation becomes the authority.
 #
-# `required_checks` empty means "whatever GitHub reports as required".
+# `required_checks` empty means EVERY check must pass, not "whatever GitHub
+# marks required". That is the safer reading and the one `readChecks`
+# implements: silently ignoring an unlisted failing check is the wrong way to
+# be wrong. It does mean deploy-preview checks (Cloudflare Pages, Neon branch
+# creation) gate the run too — list the checks explicitly if that is not
+# wanted.
 #
 # Each Linear project maps to exactly one repository, so no `groups` are needed
 # and resolution succeeds via `sole_project`.

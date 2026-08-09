@@ -1,4 +1,5 @@
 import type { GitHub } from './client.js';
+import { controllerBranchIssueId } from '../git/repository.js';
 
 export interface PullRequestRef {
   number: number;
@@ -81,7 +82,7 @@ export async function ensureDraftPullRequest(gh: GitHub, input: DraftPrInput): P
   const existing = await findPullRequestByBranch(gh, input.slug, input.head);
   if (existing && existing.state === 'OPEN') return existing;
 
-  await gh.api<unknown>([
+  await gh.text([
     'pr',
     'create',
     '--repo',
@@ -113,8 +114,18 @@ export async function updatePullRequestBody(
   slug: string,
   number: number,
   body: string,
+  title?: string,
 ): Promise<void> {
-  await gh.api<unknown>(['pr', 'edit', String(number), '--repo', slug, '--body', body]);
+  await gh.text([
+    'pr',
+    'edit',
+    String(number),
+    '--repo',
+    slug,
+    ...(title ? ['--title', title] : []),
+    '--body',
+    body,
+  ]);
 }
 
 /**
@@ -137,10 +148,17 @@ export async function listRecentlyMerged(gh: GitHub, slug: string, limit = 50): 
   return (list ?? []).map(toRef);
 }
 
-/** `ai/UNI-142-...` -> `UNI-142`, so a merged PR can release its blockers. */
+/**
+ * `ai/UNI-142-...` -> `UNI-142`, so a merged PR can release its blockers.
+ *
+ * Also matches `owner/ai/UNI-142-...`: Orca namespaces the branches it creates
+ * under the GitHub owner, so an anchored match found the prefix in none of the
+ * branches this controller actually pushes.
+ */
 export function issueIdFromBranch(branch: string, prefix: string): string | null {
-  if (!branch.startsWith(prefix)) return null;
-  const rest = branch.slice(prefix.length);
-  const match = /^([A-Z][A-Z0-9]*-\d+)/.exec(rest);
-  return match?.[1] ?? null;
+  // Shared with the push guard on purpose: "is this our branch" and "whose
+  // issue is it" are the same question, and answering them two different ways
+  // is how a merged PR released no blockers while the push that created it
+  // was considered legitimate.
+  return controllerBranchIssueId(branch, prefix);
 }

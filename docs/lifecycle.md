@@ -7,7 +7,7 @@ rough issue
    |
 ai-curate  ->  curator  ->  insufficient context -> ai-needs-context
    |
-   +-- enough context -> YOU REVIEW -> add ai-ready
+   +-- enough context -> ai-curated -> YOU REVIEW -> add ai-ready
                               |
                           ai-running
                               |
@@ -61,7 +61,8 @@ live in the controller, never in the issue tracker.
 | Internal | Linear |
 | --- | --- |
 | DISCOVERED, CURATING | `ai-curate` |
-| NEEDS_CONTEXT, WAITING_READY | `ai-needs-context` |
+| NEEDS_CONTEXT | `ai-needs-context` |
+| WAITING_READY | `ai-curated` |
 | QUEUED, PLANNING, IMPLEMENTING, INTEGRATING, LOCAL_VALIDATION, REMEDIATING | `ai-running` |
 | CI, FINAL_REVIEW, PR_READY | `ai-reviewing` |
 | DEPENDENCY_BLOCKED, BLOCKED_HUMAN, FAILED | `ai-blocked` |

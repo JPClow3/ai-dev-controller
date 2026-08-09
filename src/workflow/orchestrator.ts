@@ -7,7 +7,12 @@ import type { TransitionEvidence } from './transitions.js';
 import { InvalidTransitionError } from './transitions.js';
 import type { ValidationSummary } from '../validation/result.js';
 import type { ChecksSummary } from '../github/checks.js';
-import { assessReview, type ReviewResult, type ReviewAssessment } from '../reviews/review.js';
+import {
+  assessReview,
+  withUnaddressedCriteria,
+  type ReviewResult,
+  type ReviewAssessment,
+} from '../reviews/review.js';
 import { planRemediation } from '../reviews/remediation.js';
 import { overlappingOwnership } from '../git/integration.js';
 import { logger } from '../util/log.js';
@@ -22,6 +27,8 @@ export interface PlanTask {
   blocked_by?: string[];
   acceptance_criteria: string[];
   risk?: Risk;
+  /** Internal remediation routing constraint; planner output never sets it. */
+  exclude_aliases?: string[];
 }
 
 export interface StepContext {
@@ -31,6 +38,14 @@ export interface StepContext {
   risk: Risk;
   baseBranch: string;
   branch: string;
+  /**
+   * The parent Orca worktree, where this run's branch is actually checked out.
+   *
+   * Distinct from the registry's repository path, which holds the base branch.
+   * Every git and validation operation after PLANNING belongs here; running
+   * them in the registry path operates on the wrong tree entirely.
+   */
+  worktreePath: string;
 }
 
 /**
@@ -51,12 +66,17 @@ export interface OrchestratorDeps {
   createWorktrees: (ctx: StepContext, tasks: PlanTask[]) => Promise<void>;
 
   workersSettled: (ctx: StepContext) => Promise<{ allSettled: boolean; interrupted: string[] }>;
+  /** Relaunch interrupted tasks when their persisted attempt budget permits. */
+  retryInterruptedWorkers: (ctx: StepContext, taskIds: string[]) => Promise<boolean>;
+  /** Launches tasks whose blockers have finished; returns how many started. */
+  dispatchNextWave: (ctx: StepContext) => Promise<number>;
   integrate: (ctx: StepContext) => Promise<{ conflicts: string[]; headSha: string | null }>;
 
   runValidation: (ctx: StepContext) => Promise<ValidationSummary>;
   pushBranch: (ctx: StepContext) => Promise<void>;
   ensureDraftPr: (ctx: StepContext) => Promise<{ number: number }>;
   readChecks: (ctx: StepContext) => Promise<ChecksSummary>;
+  retryEnvironmentalCi: (ctx: StepContext, checks: ChecksSummary) => Promise<boolean>;
   /** Read from GitHub, never assumed. */
   pullRequestIsDraft: (ctx: StepContext) => Promise<boolean>;
 
@@ -67,6 +87,8 @@ export interface OrchestratorDeps {
    * is how a body ends up claiming every criterion passed.
    */
   writeProvenanceBody: (ctx: StepContext, assessment: ReviewAssessment | null) => Promise<void>;
+  /** Persist immutable routing samples before the run reaches its human gate. */
+  recordScores: (ctx: StepContext) => Promise<number>;
 
   remediationCycles: (runId: string) => number;
   originalAuthors: (runId: string) => string[];
@@ -99,6 +121,8 @@ export async function advanceRun(ctx: StepContext, deps: OrchestratorDeps): Prom
     switch (from) {
       case 'QUEUED':
         return await stepQueued(ctx, deps);
+      case 'DEPENDENCY_BLOCKED':
+        return stepDependencyBlocked(ctx, deps);
       case 'PLANNING':
         return await stepPlanning(ctx, deps);
       case 'IMPLEMENTING':
@@ -115,6 +139,8 @@ export async function advanceRun(ctx: StepContext, deps: OrchestratorDeps): Prom
         return await stepFinalReview(ctx, deps);
       case 'PR_READY':
         return await stepPrReady(ctx, deps);
+      case 'PR_OPEN':
+        return await stepPrOpen(ctx, deps);
       case 'REMEDIATING':
         return await stepRemediating(ctx, deps);
       default:
@@ -129,6 +155,13 @@ export async function advanceRun(ctx: StepContext, deps: OrchestratorDeps): Prom
     }
     throw err;
   }
+}
+
+function stepDependencyBlocked(ctx: StepContext, deps: OrchestratorDeps): StepResult {
+  if (!deps.dependenciesMerged(ctx.run.issueId)) {
+    return { from: ctx.run.state, to: null, action: 'waiting', detail: 'waiting for blocker merges' };
+  }
+  return move(ctx, deps, 'QUEUED', { reason: 'every explicit blocker is merged' });
 }
 
 function move(
@@ -189,10 +222,27 @@ async function stepImplementing(ctx: StepContext, deps: OrchestratorDeps): Promi
     return { from: ctx.run.state, to: null, action: 'waiting', detail: 'workers still running' };
   }
   if (interrupted.length > 0) {
-    return move(ctx, deps, 'REMEDIATING', {
-      reason: `interrupted worker(s): ${interrupted.join(', ')}`,
-    });
+    if (await deps.retryInterruptedWorkers(ctx, interrupted)) {
+      return {
+        from: ctx.run.state,
+        to: null,
+        action: 'waiting',
+        detail: `relaunched interrupted worker(s): ${interrupted.join(', ')}`,
+      };
+    }
+    const reason = `worker retry budget exhausted: ${interrupted.join(', ')}`;
+    await deps.blockForHuman(ctx, 'retry_budget_exhausted', reason);
+    return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
   }
+
+  // A wave finishing is not the plan finishing. Tasks held back behind a
+  // blocker become runnable exactly here, and integrating without them would
+  // ship half a plan while reporting that every task reached a terminal state.
+  const started = await deps.dispatchNextWave(ctx);
+  if (started > 0) {
+    return { from: ctx.run.state, to: null, action: 'waiting', detail: `${started} task(s) dispatched in the next wave` };
+  }
+
   return move(ctx, deps, 'INTEGRATING', {
     reason: 'all workers reached a terminal state',
     mechanicalFacts: { allTasksTerminal: true },
@@ -263,12 +313,23 @@ async function stepPrDraftOpen(ctx: StepContext, deps: OrchestratorDeps): Promis
 }
 
 async function stepCi(ctx: StepContext, deps: OrchestratorDeps): Promise<StepResult> {
+  // Branch-push CI can start without a PR, but the common check reader and the
+  // eventual deliverable need one. Creation is idempotent and remains draft.
+  if (ctx.ciTrigger === 'branch_push') await deps.ensureDraftPr(ctx);
   const checks = await deps.readChecks(ctx);
 
   if (!checks.complete) {
     return { from: ctx.run.state, to: null, action: 'waiting', detail: `checks pending: ${checks.pending.join(', ')}` };
   }
   if (!checks.allRequiredPassed) {
+    if (await deps.retryEnvironmentalCi(ctx, checks)) {
+      return {
+        from: ctx.run.state,
+        to: null,
+        action: 'waiting',
+        detail: `environmental CI failure rerun requested: ${checks.failed.join(', ')}`,
+      };
+    }
     return move(ctx, deps, 'REMEDIATING', { reason: `required checks failed: ${checks.failed.join(', ')}` });
   }
 
@@ -279,7 +340,10 @@ async function stepCi(ctx: StepContext, deps: OrchestratorDeps): Promise<StepRes
 }
 
 async function stepFinalReview(ctx: StepContext, deps: OrchestratorDeps): Promise<StepResult> {
-  const review = await deps.review(ctx);
+  const review = withUnaddressedCriteria(
+    await deps.review(ctx),
+    deps.repos.acceptanceCriteria(ctx.run.issueId).map((criterion) => criterion.id),
+  );
   // Recorded before it is acted on, so PR_READY and any restart see the same
   // verdict rather than re-deriving one.
   deps.repos.recordReview(ctx.run.id, review);
@@ -304,7 +368,15 @@ async function stepFinalReview(ctx: StepContext, deps: OrchestratorDeps): Promis
       return move(ctx, deps, 'BLOCKED_HUMAN', { reason: plan.blockedReason });
     }
     if (!plan.proceed) {
-      // Every finding was dismissed as invalid, so nothing actually blocks.
+      if (plan.dismissed.length === 0) {
+        const reason = assessment.uncertainCriteria.length > 0
+          ? `review left acceptance criteria uncertain: ${assessment.uncertainCriteria.join(', ')}`
+          : 'review did not clear the pull request and produced no actionable blocking finding';
+        await deps.blockForHuman(ctx, 'review_inconclusive', reason);
+        return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
+      }
+      // Every blocking finding was independently dismissed as invalid, so
+      // nothing actually blocks.
       return move(ctx, deps, 'PR_READY', {
         reason: 'all findings dismissed by the orchestrator',
         mechanicalFacts: {
@@ -342,10 +414,40 @@ async function stepPrReady(ctx: StepContext, deps: OrchestratorDeps): Promise<St
   // Re-read the recorded review so the body reflects the actual verdict even
   // if the controller restarted between FINAL_REVIEW and here.
   const recorded = deps.repos.lastReview(ctx.run.id);
-  const assessment = recorded
-    ? assessReview(recorded, deps.config.escalation.reviewRemediation.blockingSeverities)
+  const completeReview = recorded
+    ? withUnaddressedCriteria(
+        recorded,
+        deps.repos.acceptanceCriteria(ctx.run.issueId).map((criterion) => criterion.id),
+      )
+    : null;
+  const assessment = completeReview
+    ? assessReview(completeReview, deps.config.escalation.reviewRemediation.blockingSeverities)
     : null;
 
+  // PR_READY is persisted and therefore must defend itself against results
+  // written by an older controller or a crash between recordReview and
+  // assessment. Re-run the review with current objective evidence rather than
+  // publishing provenance that marks uncertain criteria as complete.
+  if (!assessment?.clearsForPr) {
+    if (ctx.ciTrigger === 'none') {
+      const reason = 'recorded final review does not establish every acceptance criterion';
+      await deps.blockForHuman(ctx, 'review_inconclusive', reason);
+      return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
+    }
+    const checks = await deps.readChecks(ctx);
+    if (!checks.complete || !checks.allRequiredPassed) {
+      return move(ctx, deps, 'REMEDIATING', { reason: 'CI no longer passes while revalidating final review' });
+    }
+    return move(ctx, deps, 'FINAL_REVIEW', {
+      reason: 'recorded final review was incomplete; re-running with objective CI evidence',
+      mechanicalFacts: { requiredCiPassed: true },
+    });
+  }
+
+  // `none` repositories reach review without a PR, and branch-push repos may
+  // also have recovered past CI. Ensure the one draft deliverable exists
+  // before writing its provenance; pull-request mode simply adopts its PR.
+  await deps.ensureDraftPr(ctx);
   await deps.writeProvenanceBody(ctx, assessment);
 
   // Draft state is verified against the real pull request, not asserted.
@@ -356,10 +458,33 @@ async function stepPrReady(ctx: StepContext, deps: OrchestratorDeps): Promise<St
     return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
   }
 
-  return move(ctx, deps, 'PR_OPEN', {
+  const result = move(ctx, deps, 'PR_OPEN', {
     reason: 'provenance written; ready for human review',
     mechanicalFacts: { pullRequestIsDraft: true, provenanceBodyWritten: true },
   });
+  // Scoring is auxiliary learning. The durable PR_OPEN transition must never
+  // be held hostage by a removed worktree or incomplete historical telemetry.
+  try {
+    await deps.recordScores(ctx);
+  } catch (error) {
+    log.warn(`${ctx.run.issueId}: scoring deferred - ${(error as Error).message}`);
+  }
+  return result;
+}
+
+async function stepPrOpen(ctx: StepContext, deps: OrchestratorDeps): Promise<StepResult> {
+  let count = 0;
+  try {
+    count = await deps.recordScores(ctx);
+  } catch (error) {
+    log.warn(`${ctx.run.issueId}: scoring backfill deferred - ${(error as Error).message}`);
+  }
+  return {
+    from: ctx.run.state,
+    to: null,
+    action: count > 0 ? 'scored' : 'waiting',
+    detail: count > 0 ? `${count} routing sample(s) recorded` : 'waiting for human merge',
+  };
 }
 
 async function stepRemediating(ctx: StepContext, deps: OrchestratorDeps): Promise<StepResult> {

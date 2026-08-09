@@ -27,6 +27,8 @@ export interface IssueRow {
   state: WorkflowState;
   paused: boolean;
   acceptanceCriteria: AcceptanceCriterion[];
+  /** The Linear issue URL, so the pull request can link rather than name it. */
+  url: string | null;
 }
 
 export interface AcceptanceCriterion {

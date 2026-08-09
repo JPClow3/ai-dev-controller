@@ -40,6 +40,24 @@ describe('migrations', () => {
       .get();
     expect(idx).toBeTruthy();
   });
+
+  it('persists provider cooldowns and expires transport-derived ones', () => {
+    repos.setProviderPressure('chatgpt', {
+      pressure: 'EXHAUSTED',
+      remainingAllowance: 0,
+      source: 'transport_quota',
+      manualOverride: false,
+      resetAt: '2026-08-15T22:14:00.000Z',
+    });
+
+    expect(repos.activeProviderPressures(new Date('2026-08-15T22:13:59.000Z'))).toEqual([
+      expect.objectContaining({ provider: 'chatgpt', pressure: 'EXHAUSTED' }),
+    ]);
+    expect(repos.activeProviderPressures(new Date('2026-08-15T22:14:00.000Z'))).toEqual([]);
+    expect(
+      db.raw.prepare('SELECT provider FROM provider_pressure WHERE provider = ?').get('chatgpt'),
+    ).toBeUndefined();
+  });
 });
 
 describe('claimIssueRun', () => {
@@ -94,6 +112,63 @@ describe('claimIssueRun', () => {
     repos.upsertIssue({ id: 'UNI-143', projectId: 'climagro-django', title: 'Second issue' });
     expect(repos.claimIssueRun('UNI-142', 'climagro-django')).not.toBeNull();
     expect(repos.claimIssueRun('UNI-143', 'climagro-django')).not.toBeNull();
+  });
+});
+
+describe('worker attempt budget', () => {
+  it('counts attempts for one task without including another task', () => {
+    const run = repos.claimIssueRun('UNI-142', 'climagro-django')!;
+    repos.recordTasks(run.id, [
+      { id: 'api', summary: 'API' },
+      { id: 'web', summary: 'Web' },
+    ]);
+    repos.recordAttempt(run.id, 'api', { aliasId: 'luna_high', role: 'worker' });
+    repos.recordAttempt(run.id, 'api', { aliasId: 'terra_high', role: 'worker' });
+    repos.recordAttempt(run.id, 'web', { aliasId: 'luna_high', role: 'worker' });
+
+    expect(repos.workerAttemptCount(run.id, 'api')).toBe(2);
+    expect(repos.workerAttemptCount(run.id, 'web')).toBe(1);
+  });
+
+  it('recovers the routed alias for an interrupted dispatch intent', () => {
+    const run = repos.claimIssueRun('UNI-142', 'climagro-django')!;
+    repos.recordTasks(run.id, [{ id: 'api', owns: [] }]);
+    repos.recordAttempt(run.id, 'api', { aliasId: 'luna_high', role: 'worker', isChallenger: true });
+    expect(repos.latestWorkerAttempt(run.id, 'api')).toMatchObject({ aliasId: 'luna_high', isChallenger: true });
+    expect(repos.latestWorkerAttempt(run.id, 'api')?.startedAt).toBeTruthy();
+  });
+});
+
+describe('curated issue contract', () => {
+  it('replaces the raw body with the curator contract and its routing metadata', () => {
+    repos.upsertIssue({
+      id: 'UNI-142',
+      projectId: 'climagro-django',
+      title: 'rough title',
+      body: 'make filtering nicer',
+    });
+
+    repos.recordCuratedIssue('UNI-142', {
+      title: 'Define risk-map filtering behavior',
+      body: '# Goal\nDefine filtering.\n\n# Acceptance criteria\nAC-1: Preserve the default view.',
+      role: 'routine_behavior',
+      risk: 'low',
+      acceptanceCriteria: [{ id: 'AC-1', statement: 'Preserve the default view.' }],
+    });
+
+    expect(repos.getIssueContract('UNI-142')).toContain('Define filtering.');
+    const row = db.raw.prepare('SELECT title, role, risk, acceptance_json FROM issues WHERE id = ?').get('UNI-142') as {
+      title: string; role: string; risk: string; acceptance_json: string;
+    };
+    expect(row).toEqual({
+      title: 'Define risk-map filtering behavior',
+      role: 'routine_behavior',
+      risk: 'low',
+      acceptance_json: JSON.stringify([{ id: 'AC-1', statement: 'Preserve the default view.' }]),
+    });
+
+    repos.upsertIssue({ id: 'UNI-142', projectId: 'climagro-django', title: 'ready refresh' });
+    expect(repos.issueRouting('UNI-142')).toEqual({ role: 'routine_behavior', risk: 'low' });
   });
 });
 
@@ -153,5 +228,17 @@ describe('dependencies', () => {
     repos.setDependencies('UNI-142', ['UNI-097']);
     repos.setDependencies('UNI-142', ['UNI-097', 'UNI-099']);
     expect(repos.getDependencies('UNI-142')).toHaveLength(2);
+  });
+
+  it('preserves merge satisfaction while refreshing unchanged Linear relations', () => {
+    repos.setDependencies('UNI-142', ['UNI-097', 'UNI-098']);
+    repos.markDependencySatisfiedByMerge('UNI-097');
+
+    repos.setDependencies('UNI-142', ['UNI-097', 'UNI-099']);
+
+    const deps = repos.getDependencies('UNI-142');
+    expect(deps.map((dep) => dep.blockedBy).sort()).toEqual(['UNI-097', 'UNI-099']);
+    expect(deps.find((dep) => dep.blockedBy === 'UNI-097')!.satisfiedAt).not.toBeNull();
+    expect(deps.find((dep) => dep.blockedBy === 'UNI-099')!.satisfiedAt).toBeNull();
   });
 });

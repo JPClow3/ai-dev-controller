@@ -5,6 +5,8 @@ export interface CheckRun {
   state: string;
   conclusion: string | null;
   required: boolean;
+  detailsUrl?: string;
+  githubRunId?: number;
 }
 
 export interface ChecksSummary {
@@ -16,15 +18,49 @@ export interface ChecksSummary {
   failed: string[];
 }
 
+/**
+ * The two shapes `statusCheckRollup` returns.
+ *
+ * `CheckRun` (GitHub Actions and every modern app) reports `status` plus
+ * `conclusion`. `StatusContext` (the legacy commit-status API) reports
+ * `state`, and names itself `context` rather than `name`. Reading only
+ * `state` — as this did — meant every Actions check evaluated to PENDING
+ * forever, so `complete` was never true and the run sat in CI indefinitely
+ * with all five checks long since finished.
+ */
 interface GhCheck {
-  name: string;
+  __typename?: 'CheckRun' | 'StatusContext';
+  name?: string;
+  context?: string;
+  /** CheckRun: QUEUED | IN_PROGRESS | COMPLETED */
+  status?: string;
+  /** CheckRun, only once COMPLETED: SUCCESS | FAILURE | SKIPPED | ... */
+  conclusion?: string;
+  /** StatusContext: PENDING | SUCCESS | FAILURE | ERROR */
   state?: string;
   bucket?: string;
+  detailsUrl?: string;
   workflow?: string;
 }
 
 const PASSING = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 const PENDING = new Set(['PENDING', 'QUEUED', 'IN_PROGRESS', 'WAITING', 'REQUESTED', 'EXPECTED']);
+
+/**
+ * One check's outcome, whichever shape it arrived in.
+ *
+ * A completed check with no conclusion is treated as pending rather than as a
+ * pass: an absent conclusion is missing information, and the one thing this
+ * function must never do is invent a green.
+ */
+export function checkState(check: GhCheck): string {
+  if (check.status !== undefined) {
+    const status = check.status.toUpperCase();
+    if (status !== 'COMPLETED') return status;
+    return check.conclusion?.toUpperCase() ?? 'PENDING';
+  }
+  return (check.state ?? check.bucket ?? 'PENDING').toUpperCase();
+}
 
 /**
  * Reads check runs for a pull request.
@@ -57,27 +93,42 @@ export async function readChecks(
   const requiredSet = new Set(requiredChecks);
 
   const checks: CheckRun[] = rollup.map((c) => {
-    const state = (c.state ?? c.bucket ?? 'PENDING').toUpperCase();
+    const state = checkState(c);
+    const name = c.name ?? c.context ?? '(unnamed check)';
+    const runId = c.detailsUrl?.match(/\/actions\/runs\/(\d+)/)?.[1];
     return {
-      name: c.name,
+      name,
       state,
       conclusion: PENDING.has(state) ? null : state,
-      required: requiredSet.size === 0 ? true : requiredSet.has(c.name),
+      required: requiredSet.size === 0 ? true : requiredSet.has(name),
+      ...(c.detailsUrl ? { detailsUrl: c.detailsUrl } : {}),
+      ...(runId ? { githubRunId: Number(runId) } : {}),
     };
   });
 
   const required = checks.filter((c) => c.required);
-  const pending = required.filter((c) => PENDING.has(c.state)).map((c) => c.name);
+  const observedNames = new Set(checks.map((check) => check.name));
+  const missing = requiredChecks
+    .filter((name) => !observedNames.has(name))
+    .map((name) => `${name} (not reported)`);
+  const pending = [...required.filter((c) => PENDING.has(c.state)).map((c) => c.name), ...missing];
   const failed = required.filter((c) => !PENDING.has(c.state) && !PASSING.has(c.state)).map((c) => c.name);
+
+  // An empty rollup is "not started", not "finished with nothing". GitHub
+  // reports no checks for the first seconds after a PR opens, and calling that
+  // complete-and-not-passed sent the run straight to REMEDIATING with an empty
+  // list of failures — remediating a CI result that did not exist yet.
+  const notStarted = required.length === 0 && missing.length === 0;
 
   return {
     headSha,
-    complete: pending.length === 0,
-    // No checks at all is NOT a pass: it usually means the workflow never
-    // triggered, which is precisely the failure mode PR_DRAFT_OPEN exists for.
-    allRequiredPassed: pending.length === 0 && failed.length === 0 && required.length > 0,
+    complete: !notStarted && pending.length === 0,
+    // No checks at all is NOT a pass either: it can mean the workflow never
+    // triggers on this branch, which is the failure mode PR_DRAFT_OPEN exists
+    // for. Neither passed nor complete leaves the run waiting, visibly.
+    allRequiredPassed: pending.length === 0 && failed.length === 0 && !notStarted,
     checks,
-    pending,
+    pending: notStarted ? ['(no checks reported yet)'] : pending,
     failed,
   };
 }

@@ -23,7 +23,10 @@ beforeEach(() => {
     maxAgents: 5,
     routingProfile: 'default',
   });
-  repos.upsertIssue({ id: 'UNI-1', projectId: 'moto-track', title: 'test' });
+  repos.upsertIssue({
+    id: 'UNI-1', projectId: 'moto-track', title: 'test',
+    acceptanceCriteria: [{ id: 'AC-1', statement: 'The behavior works.' }],
+  });
 });
 afterEach(() => db.close());
 
@@ -41,6 +44,8 @@ function deps(over: Partial<OrchestratorDeps> = {}): OrchestratorDeps {
     })),
     createWorktrees: vi.fn(async () => undefined),
     workersSettled: vi.fn(async () => ({ allSettled: true, interrupted: [] })),
+    retryInterruptedWorkers: vi.fn(async () => true),
+    dispatchNextWave: vi.fn(async () => 0),
     integrate: vi.fn(async () => ({ conflicts: [], headSha: 'abc1234567' })),
     runValidation: vi.fn(async () => ({
       passed: true,
@@ -59,6 +64,7 @@ function deps(over: Partial<OrchestratorDeps> = {}): OrchestratorDeps {
       pending: [],
       failed: [],
     })),
+    retryEnvironmentalCi: vi.fn(async () => false),
     review: vi.fn(async () => ({
       verdict: 'approve' as const,
       issue_id: 'UNI-1',
@@ -69,6 +75,7 @@ function deps(over: Partial<OrchestratorDeps> = {}): OrchestratorDeps {
     })),
     pullRequestIsDraft: vi.fn(async () => true),
     writeProvenanceBody: vi.fn(async () => undefined),
+    recordScores: vi.fn(async () => 1),
     remediationCycles: () => 0,
     originalAuthors: () => ['deepseek_flash'],
     dispatchRemediation: vi.fn(async () => undefined),
@@ -89,6 +96,7 @@ function ctx(state: WorkflowState, ciTrigger: CiTrigger = 'pull_request'): StepC
     risk: 'low',
     baseBranch: 'main',
     branch: 'ai/UNI-1-test',
+    worktreePath: 'C:/wt/ai-UNI-1-test',
   };
 }
 
@@ -133,21 +141,105 @@ describe('the happy path, one step at a time', () => {
     expect((await advanceRun(ctx('CI'), deps())).to).toBe('FINAL_REVIEW');
   });
 
+  it('branch-push CI ensures the single draft PR exists before reading checks', async () => {
+    const d = deps();
+    const result = await advanceRun(ctx('CI', 'branch_push'), d);
+    expect(result.to).toBe('FINAL_REVIEW');
+    expect(d.ensureDraftPr).toHaveBeenCalledOnce();
+    expect(vi.mocked(d.ensureDraftPr).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(d.readChecks).mock.invocationCallOrder[0]!,
+    );
+  });
+
   it('FINAL_REVIEW clears to PR_READY on a clean review', async () => {
     expect((await advanceRun(ctx('FINAL_REVIEW'), deps())).to).toBe('PR_READY');
   });
 
+  it('FINAL_REVIEW cannot clear when the reviewer omits an expected criterion', async () => {
+    const d = deps({
+      review: vi.fn(async () => ({
+        verdict: 'approve' as const, issue_id: 'UNI-1', stage: 'final' as const,
+        reviewer: { id: 'luna_low' }, findings: [], criteria: [],
+      })),
+    });
+    const c = ctx('FINAL_REVIEW');
+    const result = await advanceRun(c, d);
+    expect(result.to).toBe('BLOCKED_HUMAN');
+    expect(repos.lastReview(c.run.id)?.criteria).toEqual([
+      expect.objectContaining({ id: 'AC-1', status: 'uncertain' }),
+    ]);
+  });
+
   it('PR_READY writes provenance before announcing the PR', async () => {
     const d = deps();
-    const result = await advanceRun(ctx('PR_READY'), d);
+    const c = ctx('PR_READY');
+    repos.recordReview(c.run.id, {
+      verdict: 'approve', stage: 'final', reviewer: { id: 'luna_low' },
+      findings: [], criteria: [{ id: 'AC-1', status: 'satisfied' }],
+    });
+    const result = await advanceRun(c, d);
     expect(result.to).toBe('PR_OPEN');
     expect(d.writeProvenanceBody).toHaveBeenCalled();
   });
 
+  it('PR_READY opens for human review even when auxiliary scoring is unavailable', async () => {
+    const d = deps({ recordScores: vi.fn(async () => { throw new Error('worktree removed'); }) });
+    const c = ctx('PR_READY');
+    repos.recordReview(c.run.id, {
+      verdict: 'approve', stage: 'final', reviewer: { id: 'luna_low' },
+      findings: [], criteria: [{ id: 'AC-1', status: 'satisfied' }],
+    });
+    expect((await advanceRun(c, d)).to).toBe('PR_OPEN');
+  });
+
+  it('a no-CI run creates its single draft PR at PR_READY before provenance', async () => {
+    const d = deps();
+    const c = ctx('PR_READY', 'none');
+    repos.recordReview(c.run.id, {
+      verdict: 'approve',
+      stage: 'final',
+      reviewer: { id: 'luna_high' },
+      findings: [],
+      criteria: [{ id: 'AC-1', status: 'satisfied' }],
+    });
+    const result = await advanceRun(c, d);
+    expect(result.to).toBe('PR_OPEN');
+    expect(d.ensureDraftPr).toHaveBeenCalledOnce();
+    expect(vi.mocked(d.ensureDraftPr).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(d.writeProvenanceBody).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('PR_READY re-runs an incomplete persisted review instead of publishing it', async () => {
+    const c = ctx('PR_READY');
+    repos.recordReview(c.run.id, {
+      verdict: 'request_changes', stage: 'final', reviewer: { id: 'luna_low' },
+      findings: [], criteria: [{ id: 'AC-1', status: 'uncertain' }],
+    });
+    const d = deps();
+    const result = await advanceRun(c, d);
+    expect(result.to).toBe('FINAL_REVIEW');
+    expect(d.writeProvenanceBody).not.toHaveBeenCalled();
+  });
+
+  it('PR_READY re-runs an approving review that omitted an expected criterion', async () => {
+    const c = ctx('PR_READY');
+    repos.recordReview(c.run.id, {
+      verdict: 'approve', stage: 'final', reviewer: { id: 'luna_low' },
+      findings: [], criteria: [],
+    });
+    const d = deps();
+    const result = await advanceRun(c, d);
+    expect(result.to).toBe('FINAL_REVIEW');
+    expect(d.writeProvenanceBody).not.toHaveBeenCalled();
+  });
+
   it('PR_OPEN waits for a human rather than merging', async () => {
-    const result = await advanceRun(ctx('PR_OPEN'), deps());
+    const d = deps({ recordScores: vi.fn(async () => 0) });
+    const result = await advanceRun(ctx('PR_OPEN'), d);
     expect(result.to).toBeNull();
-    expect(result.action).toBe('idle');
+    expect(result.action).toBe('waiting');
+    expect(d.recordScores).toHaveBeenCalledOnce();
   });
 });
 
@@ -189,14 +281,54 @@ describe('failures route to remediation, not forward', () => {
     expect((await advanceRun(ctx('CI'), d)).to).toBe('REMEDIATING');
   });
 
+  it('holds in CI after requesting one bounded environmental rerun', async () => {
+    const d = deps({
+      readChecks: vi.fn(async () => ({
+        headSha: 'a', complete: true, allRequiredPassed: false,
+        checks: [], pending: [], failed: ['test'],
+      })),
+      retryEnvironmentalCi: vi.fn(async () => true),
+    });
+    const result = await advanceRun(ctx('CI'), d);
+    expect(result.to).toBeNull();
+    expect(result.action).toBe('waiting');
+    expect(d.retryEnvironmentalCi).toHaveBeenCalled();
+  });
+
   it('integration conflicts go to REMEDIATING, resolved in the parent', async () => {
     const d = deps({ integrate: vi.fn(async () => ({ conflicts: ['src/shared.ts'], headSha: null })) });
     expect((await advanceRun(ctx('INTEGRATING'), d)).to).toBe('REMEDIATING');
   });
 
-  it('an interrupted worker goes to REMEDIATING', async () => {
-    const d = deps({ workersSettled: vi.fn(async () => ({ allSettled: true, interrupted: ['api'] })) });
-    expect((await advanceRun(ctx('IMPLEMENTING'), d)).to).toBe('REMEDIATING');
+  it('relaunches an interrupted worker within budget without leaving IMPLEMENTING', async () => {
+    const retryInterruptedWorkers = vi.fn(async () => true);
+    const d = deps({
+      workersSettled: vi.fn(async () => ({ allSettled: true, interrupted: ['api'] })),
+      retryInterruptedWorkers,
+    });
+
+    const result = await advanceRun(ctx('IMPLEMENTING'), d);
+    expect(result.to).toBeNull();
+    expect(result.action).toBe('waiting');
+    expect(retryInterruptedWorkers).toHaveBeenCalledWith(expect.anything(), ['api']);
+  });
+
+  it('blocks after the interrupted-worker retry budget is exhausted', async () => {
+    const retryInterruptedWorkers = vi.fn(async () => false);
+    const blockForHuman = vi.fn(async () => undefined);
+    const d = deps({
+      workersSettled: vi.fn(async () => ({ allSettled: true, interrupted: ['api'] })),
+      retryInterruptedWorkers,
+      blockForHuman,
+    });
+
+    const result = await advanceRun(ctx('IMPLEMENTING'), d);
+    expect(result.to).toBe('BLOCKED_HUMAN');
+    expect(blockForHuman).toHaveBeenCalledWith(
+      expect.anything(),
+      'retry_budget_exhausted',
+      expect.stringMatching(/api/),
+    );
   });
 
   it('blocking review findings go to REMEDIATING', async () => {
@@ -294,5 +426,40 @@ describe('dependency gating', () => {
     const result = await advanceRun(ctx('QUEUED'), d);
     expect(result.to).toBe('DEPENDENCY_BLOCKED');
     expect(d.fetchFreshBase).not.toHaveBeenCalled();
+  });
+
+  it('keeps a dependency-blocked run idle until every blocker merges', async () => {
+    const d = deps({ dependenciesMerged: () => false });
+    const result = await advanceRun(ctx('DEPENDENCY_BLOCKED'), d);
+    expect(result.to).toBeNull();
+    expect(result.action).toBe('waiting');
+  });
+
+  it('requeues a dependency-blocked run after every blocker merges', async () => {
+    const d = deps({ dependenciesMerged: () => true });
+    const result = await advanceRun(ctx('DEPENDENCY_BLOCKED'), d);
+    expect(result.to).toBe('QUEUED');
+  });
+});
+
+describe('routing evidence finalization', () => {
+  it('attempts best-effort scoring as the draft PR becomes available for human review', async () => {
+    const d = deps();
+    const c = ctx('PR_READY');
+    repos.recordReview(c.run.id, {
+      verdict: 'approve', reviewer: { id: 'luna_low' }, findings: [],
+      criteria: [{ id: 'AC-1', status: 'satisfied', evidence: 'test passed' }],
+    });
+    const result = await advanceRun(c, d);
+    expect(d.recordScores).toHaveBeenCalledOnce();
+    expect(result.to).toBe('PR_OPEN');
+  });
+
+  it('backfills a legacy PR_OPEN run idempotently', async () => {
+    const d = deps();
+    const result = await advanceRun(ctx('PR_OPEN'), d);
+    expect(d.recordScores).toHaveBeenCalledOnce();
+    expect(result.to).toBeNull();
+    expect(result.action).toBe('scored');
   });
 });

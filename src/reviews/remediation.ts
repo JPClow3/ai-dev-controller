@@ -46,8 +46,23 @@ export interface RemediationInput {
 export function planRemediation(input: RemediationInput, escalation: EscalationConfig): RemediationPlan {
   const cycle = input.cyclesUsed + 1;
   const dismissed: Array<{ finding: Finding; why: string }> = [];
+  const unresolvedCriteria = new Set([
+    ...input.assessment.unsatisfiedCriteria,
+    ...input.assessment.uncertainCriteria,
+  ]);
+  // Severity decides whether an otherwise-satisfied change is worth rework.
+  // It must not make an acceptance-criterion gap disappear: a low-severity
+  // test omission can still be the only reason a required criterion remains
+  // uncertain, as the JP-9 pilot demonstrated.
+  const actionable = [
+    ...input.assessment.blocking,
+    ...input.assessment.nonBlocking.filter(
+      (finding) => finding.acceptance_criterion !== null
+        && unresolvedCriteria.has(finding.acceptance_criterion),
+    ),
+  ].filter((finding, index, all) => all.indexOf(finding) === index);
 
-  if (input.assessment.blocking.length === 0 && input.assessment.unsatisfiedCriteria.length === 0) {
+  if (actionable.length === 0) {
     return { proceed: false, cycle, tasks: [], dismissed };
   }
 
@@ -57,12 +72,12 @@ export function planRemediation(input: RemediationInput, escalation: EscalationC
       cycle,
       tasks: [],
       dismissed,
-      blockedReason: `Review remediation budget exhausted after ${input.cyclesUsed} cycle(s). ${input.assessment.blocking.length} blocking finding(s) remain.`,
+      blockedReason: `Review remediation budget exhausted after ${input.cyclesUsed} cycle(s). ${actionable.length} actionable finding(s) remain.`,
     };
   }
 
   const tasks: RemediationTask[] = [];
-  input.assessment.blocking.forEach((finding, index) => {
+  actionable.forEach((finding, index) => {
     const check = input.validated?.(finding) ?? { valid: true };
     if (!check.valid) {
       dismissed.push({ finding, why: check.why ?? 'orchestrator judged the finding invalid' });

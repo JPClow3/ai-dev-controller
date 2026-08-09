@@ -8,15 +8,21 @@ import { summarise, tail, type CommandOutcome, type ValidationCommand, type Vali
  * The repository declares what validation means. The central controller must
  * never contain "run pytest for Python" — it asks the repository.
  */
-export function readValidationCommands(repoPath: string): ValidationCommand[] {
+interface ProjectYaml {
+  validation?: {
+    setup?: { command?: string; required?: boolean } | null;
+    commands?: Record<string, { command?: string; required?: boolean }>;
+  };
+}
+
+function readProjectYaml(repoPath: string): ProjectYaml | null {
   const path = join(repoPath, '.ai-workflow/project.yaml');
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) return null;
+  return parse(readFileSync(path, 'utf8')) as ProjectYaml | null;
+}
 
-  const doc = parse(readFileSync(path, 'utf8')) as {
-    validation?: { commands?: Record<string, { command?: string; required?: boolean }> };
-  } | null;
-
-  const commands = doc?.validation?.commands ?? {};
+export function readValidationCommands(repoPath: string): ValidationCommand[] {
+  const commands = readProjectYaml(repoPath)?.validation?.commands ?? {};
   return Object.entries(commands)
     .filter(([, spec]) => typeof spec?.command === 'string' && spec.command.length > 0)
     .map(([name, spec]) => ({
@@ -24,6 +30,21 @@ export function readValidationCommands(repoPath: string): ValidationCommand[] {
       command: spec.command as string,
       required: spec.required !== false,
     }));
+}
+
+/**
+ * How the repository prepares a fresh worktree before validation.
+ *
+ * Orca worktrees are new checkouts with no `node_modules`, no virtualenv and
+ * no build cache, so `npm run typecheck` in one fails for a reason that has
+ * nothing to do with the change under test. The repository declares its own
+ * preparation for the same reason it declares its own validation: the central
+ * controller must not know that this project happens to use npm.
+ */
+export function readSetupCommand(repoPath: string): ValidationCommand | null {
+  const setup = readProjectYaml(repoPath)?.validation?.setup;
+  if (!setup?.command) return null;
+  return { name: 'setup', command: setup.command, required: setup.required !== false };
 }
 
 export interface RunnerDeps {
