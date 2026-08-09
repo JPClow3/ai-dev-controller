@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assessReview, unaddressedCriteria, toPrComments, type ReviewResult } from '../../src/reviews/review.js';
+import { assessReview, unaddressedCriteria, withUnaddressedCriteria, toPrComments, type ReviewResult } from '../../src/reviews/review.js';
 import { buildFinalReviewPacket, stripAnchoring, containsAnchoring, renderPacket } from '../../src/reviews/packet.js';
 import { planRemediation } from '../../src/reviews/remediation.js';
 import { loadControllerConfig } from '../../src/config/load-config.js';
@@ -88,6 +88,22 @@ describe('anchoring is stripped, not just avoided', () => {
     });
     expect(packet.testsChanged).toEqual(['tests/a.test.ts', 'src/b.spec.ts']);
   });
+
+  it('includes current changed-file contents so unchanged context can prove a criterion', () => {
+    const packet = buildFinalReviewPacket({
+      issueId: 'UNI-1',
+      originalIssue: '',
+      curatedIssue: '',
+      acceptanceCriteria: [{ id: 'AC-1', statement: 'Preserve the exact object test.' }],
+      agentsMd: '',
+      architectureSummary: '',
+      diff: '+ expect(result).not.toHaveProperty("extra")',
+      changedFiles: ['src/a.test.ts'],
+      currentFiles: { 'src/a.test.ts': 'expect(result).toEqual({ value: 1 })' },
+    });
+
+    expect(renderPacket(packet)).toContain('expect(result).toEqual({ value: 1 })');
+  });
 });
 
 describe('the controller trusts evidence over the stated verdict', () => {
@@ -104,10 +120,24 @@ describe('the controller trusts evidence over the stated verdict', () => {
     expect(a.inconsistencies[0]).toMatch(/unsatisfied criteria/);
   });
 
+  it('does not clear an approval with an uncertain criterion', () => {
+    const a = assessReview(review({ criteria: [{ id: 'AC-1', status: 'uncertain' }] }), BLOCKING);
+    expect(a.verdict).toBe('request_changes');
+    expect(a.clearsForPr).toBe(false);
+    expect(a.inconsistencies[0]).toMatch(/uncertain criteria/);
+  });
+
   it('accepts a clean approval', () => {
     const a = assessReview(review(), BLOCKING);
     expect(a.verdict).toBe('approve');
     expect(a.clearsForPr).toBe(true);
+  });
+
+  it('does not crash on a persisted legacy approval that omitted empty findings', () => {
+    const legacy = { ...review(), findings: undefined } as unknown as ReviewResult;
+    const assessment = assessReview(legacy, BLOCKING);
+    expect(assessment.clearsForPr).toBe(true);
+    expect(assessment.blocking).toEqual([]);
   });
 
   it('does not treat medium and low findings as blocking', () => {
@@ -132,6 +162,13 @@ describe('the controller trusts evidence over the stated verdict', () => {
 
   it('treats an unaddressed criterion as unaddressed, not passed', () => {
     expect(unaddressedCriteria(review(), ['AC-1', 'AC-2'])).toEqual(['AC-2']);
+  });
+
+  it('normalizes omitted acceptance criteria as uncertain', () => {
+    expect(withUnaddressedCriteria(review(), ['AC-1', 'AC-2']).criteria).toEqual([
+      expect.objectContaining({ id: 'AC-1', status: 'satisfied' }),
+      expect.objectContaining({ id: 'AC-2', status: 'uncertain' }),
+    ]);
   });
 });
 
@@ -174,6 +211,23 @@ describe('remediation is bounded and routed away from the author', () => {
   it('treats an unvalidated finding as valid', () => {
     const plan = planRemediation({ assessment, cyclesUsed: 0, originalAuthors: ['x'] }, escalation);
     expect(plan.tasks).toHaveLength(1);
+  });
+
+  it('remediates a non-blocking finding when it is the evidence for an uncertain criterion', () => {
+    const uncertain = assessReview(review({
+      verdict: 'request_changes',
+      findings: [finding({ severity: 'low', acceptance_criterion: 'AC-1' })],
+      criteria: [{ id: 'AC-1', status: 'uncertain' }],
+    }), BLOCKING);
+
+    const plan = planRemediation(
+      { assessment: uncertain, cyclesUsed: 0, originalAuthors: ['luna_high'] },
+      escalation,
+    );
+
+    expect(plan.proceed).toBe(true);
+    expect(plan.tasks).toHaveLength(1);
+    expect(plan.tasks[0]?.acceptanceCriterion).toBe('AC-1');
   });
 
   it('does nothing when there is nothing blocking', () => {

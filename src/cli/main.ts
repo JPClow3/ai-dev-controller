@@ -9,15 +9,17 @@ import { loadControllerConfig } from '../config/load-config.js';
 import { openDatabase } from '../state/db.js';
 import { acquireControllerLock } from '../state/lock.js';
 import { createRepositories } from '../state/repositories.js';
-import { defaultPressure, pressureFromOrca, withOverride } from '../routing/pressure.js';
+import { defaultPressure, pressureFromOrca } from '../routing/pressure.js';
+import { refreshRuntimePressure } from '../routing/quota.js';
 import { createOrcaClient, status as orcaStatus } from '../orca/client.js';
 import { planBootstrap } from '../knowledge/bootstrap.js';
 import { openBootstrapPullRequest } from '../knowledge/bootstrap-pr.js';
 import { realGit } from '../git/repository.js';
 import { createGitHub } from '../github/client.js';
-import { reconcileAll, applicable } from '../recovery/reconcile.js';
+import { applicable } from '../recovery/reconcile.js';
 import { buildController } from '../workflow/wire.js';
 import { runLoop } from '../workflow/runner.js';
+import { assertLifecycleLabelsExist } from '../linear/labels.js';
 
 /**
  * Operational escape hatch, not a daily tool. The normal loop is
@@ -175,21 +177,27 @@ program
   .action(async () => {
     const config = loadControllerConfig(ROOT);
     let pressure = defaultPressure(config.routing);
+    let observed = {};
 
     // Real quota, read from Orca rather than assumed.
     try {
       const orca = createOrcaClient({ bin: config.global.orca.bin });
       const accounts = await orca.json<{ rateLimits?: Parameters<typeof pressureFromOrca>[0] }>(['account', 'list']);
-      pressure = { ...pressure, ...(pressureFromOrca(accounts.rateLimits ?? {}) as typeof pressure) };
+      observed = pressureFromOrca(accounts.rateLimits ?? {});
     } catch {
       console.log(pc.dim('(could not read live quota from Orca; showing defaults)\n'));
     }
 
-    // The same operator override the scheduler applies. Without it this
-    // command reported a routing table the controller would never use.
-    for (const provider of (process.env['AI_DEV_DISABLED_PROVIDERS'] ?? '').split(',').map((p) => p.trim()).filter(Boolean)) {
-      pressure = withOverride(pressure, provider, 'EXHAUSTED');
-    }
+    const db = openDatabase(config.global.paths.database);
+    const persisted = createRepositories(db).activeProviderPressures();
+    db.close();
+    const disabled = (process.env['AI_DEV_DISABLED_PROVIDERS'] ?? '')
+      .split(',')
+      .map((provider) => provider.trim())
+      .filter(Boolean);
+    // Show the same effective state used by selectors: live telemetry first,
+    // then durable transport cooldowns and explicit operator overrides.
+    refreshRuntimePressure(pressure, config.routing, persisted, disabled, observed);
 
     console.log(pc.bold('provider pressure'));
     for (const p of Object.values(pressure)) {
@@ -326,41 +334,42 @@ program
   .command('recover')
   .description('reconcile interrupted runs against Orca, git, GitHub and Linear')
   .option('--apply', 'apply the reconciliation instead of reporting it')
-  .action((opts: { apply?: boolean }) =>
-    withDb(({ repos }) => {
+  .action(async (opts: { apply?: boolean }) => {
+    const config = loadControllerConfig(ROOT);
+    let release: (() => void) | undefined;
+    if (opts.apply) {
+      try {
+        release = acquireControllerLock(config.global.paths.database);
+      } catch (err) {
+        console.error(pc.red((err as Error).message));
+        process.exitCode = 1;
+        return;
+      }
+    }
+
+    const db = openDatabase(config.global.paths.database);
+    try {
+      const repos = createRepositories(db);
       const runs = repos.activeRuns();
       if (runs.length === 0) return void console.log(pc.dim('No incomplete runs.'));
 
-      // Observation is left unpopulated here: the CLI reports what the
-      // reconciler would conclude from controller state alone. The scheduler
-      // fills in Orca/git/GitHub before acting.
-      const reports = reconcileAll(
-        runs.map((r) => ({
-          runId: r.id,
-          issueId: r.issueId,
-          dbState: r.state,
-          ciTrigger: 'pull_request' as const,
-          orca: null,
-          git: null,
-          github: null,
-          linear: null,
-        })),
-      );
+      const { recoverReality } = buildController({ config, repos, writeToLinear: Boolean(opts.apply) });
+      const result = await recoverReality(Boolean(opts.apply));
 
-      for (const report of reports) {
+      for (const report of result.reports) {
         const flag = applicable(report) ? pc.yellow(report.action) : pc.dim(report.action);
         console.log(`${report.issueId.padEnd(12)} ${report.dbState.padEnd(18)} -> ${report.derivedState.padEnd(18)} ${flag}`);
         console.log(pc.dim(`  ${report.reason}`));
-        if (opts.apply && applicable(report)) {
-          repos.transitionRun(report.runId, report.derivedState, {
-            reason: `recovery: ${report.reason}`,
-            mechanicalFacts: report.facts,
-          });
-        }
+      }
+      for (const failure of result.observationErrors) {
+        console.log(pc.yellow(`  ${failure.system} unavailable for ${failure.runId}: ${failure.message}`));
       }
       if (!opts.apply) console.log(pc.dim('\nReport only; pass --apply to reconcile.'));
-    }),
-  );
+    } finally {
+      db.close();
+      release?.();
+    }
+  });
 
 program
   .command('doctor')
@@ -371,6 +380,15 @@ program
 
     checks.push(['config', true, `${Object.keys(config.registry.projects).length} project(s) registered`]);
     checks.push(['LINEAR_API_KEY', Boolean(process.env['LINEAR_API_KEY']), 'required for issue polling']);
+
+    if (process.env['LINEAR_API_KEY']) {
+      try {
+        await assertLifecycleLabelsExist();
+        checks.push(['Linear labels', true, 'all lifecycle labels present']);
+      } catch (err) {
+        checks.push(['Linear labels', false, (err as Error).message.slice(0, 120)]);
+      }
+    }
 
     try {
       const orca = createOrcaClient({ bin: config.global.orca.bin });
@@ -400,6 +418,14 @@ program
   .action(async (opts: { once?: boolean; dryRun?: boolean }) => {
     const config = loadControllerConfig(ROOT);
 
+    try {
+      await assertLifecycleLabelsExist();
+    } catch (err) {
+      console.error(pc.red(`Linear lifecycle-label check failed: ${(err as Error).message}`));
+      process.exitCode = 1;
+      return;
+    }
+
     // Only the loop takes the lock. The read-only commands must stay usable
     // while it runs — inspecting a live controller is the main reason they
     // exist.
@@ -421,7 +447,7 @@ program
       const last = reports[reports.length - 1];
       if (last) {
         console.log(
-          `ready ${last.readyIssues.length} | dispatched ${last.dispatched.length} | ` +
+          `curated ${last.curated} | ready ${last.readyIssues.length} | dispatched ${last.dispatched.length} | ` +
             `blocked ${last.blockedIssues.length} | needs-context ${last.needsContext.length}` +
             (last.throttled ? ' | THROTTLED' : ''),
         );

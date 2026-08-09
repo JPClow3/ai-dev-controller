@@ -2,9 +2,11 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { setLinearClient } from '../../src/linear/client.js';
 import {
   setAiLifecycleLabel,
+  clearAiLifecycleLabels,
   assertLabelWritable,
   ForbiddenLabelWrite,
   CONTROLLER_WRITABLE_LABELS,
+  assertLifecycleLabelsExist,
 } from '../../src/linear/labels.js';
 import { AI_LIFECYCLE_LABELS } from '../../src/workflow/states.js';
 
@@ -113,5 +115,28 @@ describe('lifecycle label write preserves everything it does not own', () => {
     } as never);
 
     await expect(setAiLifecycleLabel('UNI-1', 'ai-running')).rejects.toThrow(/does not exist in this workspace/);
+  });
+
+  it('clears lifecycle state after merge while preserving user labels', async () => {
+    const { updateIssue, nameOf } = fakeLinear(['ai-pr-open', 'Feature']);
+    await clearAiLifecycleLabels('UNI-1');
+
+    const names = (updateIssue.mock.calls[0] as unknown as [string, { labelIds: string[] }])[1].labelIds.map(nameOf);
+    expect(names).toEqual(['Feature']);
+  });
+});
+
+describe('startup lifecycle-label contract', () => {
+  it('passes when every configured lifecycle label exists', async () => {
+    fakeLinear([]);
+    await expect(assertLifecycleLabelsExist()).resolves.toBeUndefined();
+  });
+
+  it('fails before polling when workspace labels are missing', async () => {
+    setLinearClient({
+      issueLabels: vi.fn(async () => ({ nodes: [{ id: 'l1', name: 'ai-ready' }] })),
+    } as never);
+
+    await expect(assertLifecycleLabelsExist()).rejects.toThrow(/ai-curated/);
   });
 });

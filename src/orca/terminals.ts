@@ -121,6 +121,8 @@ export const WORKER_PROMPT_FILE = 'prompt.txt';
 export const WORKER_RESULT_FILE = 'result.txt';
 export const WORKER_SCRIPT_FILE = 'run.ps1';
 export const WORKER_EXIT_FILE = 'exit.txt';
+export const WORKER_HEARTBEAT_FILE = 'heartbeat.txt';
+export const WORKER_HEARTBEAT_STALE_MS = 120_000;
 
 /**
  * The launcher script a worker terminal runs.
@@ -189,10 +191,21 @@ export function workerScript(profile: string, controlDir: string, options: Worke
 
   return [
     '$ErrorActionPreference = "Continue"',
+    `$heartbeatPath = ${q(WORKER_HEARTBEAT_FILE)}`,
+    'Set-Content -Path $heartbeatPath -Value ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -Encoding ascii',
+    '$heartbeatJob = Start-Job -ScriptBlock {',
+    '  param($path)',
+    '  while ($true) {',
+    '    Set-Content -Path $path -Value ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -Encoding ascii',
+    '    Start-Sleep -Seconds 10',
+    '  }',
+    '} -ArgumentList $heartbeatPath',
     ...setup,
     `Get-Content -Raw ${q(WORKER_PROMPT_FILE)} | ${codex}`,
     '$code = $LASTEXITCODE',
     'if ($null -eq $code) { $code = 0 }',
+    'Stop-Job -Job $heartbeatJob -ErrorAction SilentlyContinue',
+    'Remove-Job -Job $heartbeatJob -Force -ErrorAction SilentlyContinue',
     `Set-Content -Path ${q(WORKER_EXIT_FILE)} -Value $code -Encoding ascii`,
     'Write-Host "ai-dev worker finished with exit $code"',
     '',
@@ -214,6 +227,31 @@ export function readWorkerExit(exitFileContents: string | null): number | null {
   if (exitFileContents === null) return null;
   const parsed = Number.parseInt(exitFileContents.trim(), 10);
   return Number.isFinite(parsed) ? parsed : 1;
+}
+
+export interface WorkerLiveness {
+  state: 'running' | 'settled' | 'interrupted';
+  exitCode: number | null;
+}
+
+/**
+ * Classifies a worker from durable files rather than an Orca terminal handle.
+ * A terminal can survive after its command exits, while a process can vanish
+ * without writing an exit sentinel. The heartbeat distinguishes those two
+ * cases after a bounded grace period.
+ */
+export function classifyWorkerLiveness(
+  exitFileContents: string | null,
+  heartbeatModifiedMs: number | null,
+  nowMs = Date.now(),
+  staleAfterMs = WORKER_HEARTBEAT_STALE_MS,
+): WorkerLiveness {
+  const exitCode = readWorkerExit(exitFileContents);
+  if (exitCode !== null) return { state: 'settled', exitCode };
+  if (heartbeatModifiedMs !== null && nowMs - heartbeatModifiedMs <= staleAfterMs) {
+    return { state: 'running', exitCode: null };
+  }
+  return { state: 'interrupted', exitCode: null };
 }
 
 /** Launches a worker from the prompt and script already written into the worktree. */

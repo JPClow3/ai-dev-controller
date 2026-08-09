@@ -88,6 +88,16 @@ export async function updateIssueBody(identifier: string, body: string): Promise
   await client.updateIssue(issue.id, { description: body });
 }
 
+/** Writes the full curator result back to Linear as one coherent contract. */
+export async function updateIssueContract(
+  identifier: string,
+  contract: { title: string; body: string },
+): Promise<void> {
+  const client = getLinearClient();
+  const issue = await client.issue(identifier);
+  await client.updateIssue(issue.id, { title: contract.title, description: contract.body });
+}
+
 export async function commentOnIssue(identifier: string, body: string): Promise<string> {
   const client = getLinearClient();
   const issue = await client.issue(identifier);

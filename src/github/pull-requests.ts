@@ -82,7 +82,7 @@ export async function ensureDraftPullRequest(gh: GitHub, input: DraftPrInput): P
   const existing = await findPullRequestByBranch(gh, input.slug, input.head);
   if (existing && existing.state === 'OPEN') return existing;
 
-  await gh.api<unknown>([
+  await gh.text([
     'pr',
     'create',
     '--repo',
@@ -114,8 +114,18 @@ export async function updatePullRequestBody(
   slug: string,
   number: number,
   body: string,
+  title?: string,
 ): Promise<void> {
-  await gh.api<unknown>(['pr', 'edit', String(number), '--repo', slug, '--body', body]);
+  await gh.text([
+    'pr',
+    'edit',
+    String(number),
+    '--repo',
+    slug,
+    ...(title ? ['--title', title] : []),
+    '--body',
+    body,
+  ]);
 }
 
 /**

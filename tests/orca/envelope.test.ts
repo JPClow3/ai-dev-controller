@@ -6,6 +6,7 @@ import {
   createWorkerWorktree,
   unwrapWorktree,
   branchNameFor,
+  findWorkerWorktree,
 } from '../../src/orca/worktrees.js';
 import {
   launchWorker,
@@ -13,6 +14,7 @@ import {
   workerCommand,
   workerScript,
   readWorkerExit,
+  classifyWorkerLiveness,
 } from '../../src/orca/terminals.js';
 
 /** Controller-owned scratch directory, deliberately outside any worktree. */
@@ -95,6 +97,17 @@ describe('Orca wraps single objects under a named key', () => {
  * made Orca exit 1. The parent link already expresses the relationship.
  */
 describe('worker worktree names carry no path separators', () => {
+  it('adopts the deterministic child after a crash instead of creating a duplicate', () => {
+    const existing = {
+      id: 'repo::C:/wt/ai-JP-7-api',
+      path: 'C:/wt/ai-JP-7-api',
+      displayName: 'ai-JP-7-api',
+      parentWorktreeId: 'repo::C:/wt/ai-JP-7',
+    };
+    expect(findWorkerWorktree([existing], existing.parentWorktreeId, 'ai-JP-7-api')).toBe(existing);
+    expect(findWorkerWorktree([existing], existing.parentWorktreeId, 'ai-JP-7-web')).toBeNull();
+  });
+
   it('flattens the parent branch into the child name', () => {
     const parentBranch = 'ai/JP-7-routine-behavior';
     const name = `${parentBranch.replace(/\//g, '-')}-github-fallback-tests`;
@@ -222,6 +235,23 @@ describe('worker launch needs no GUI-registered agent', () => {
     expect(readWorkerExit('1\n')).toBe(1);
     // Unparseable is a failure, not a pass.
     expect(readWorkerExit('what')).toBe(1);
+  });
+
+  it('classifies a missing exit with a recent heartbeat as running', () => {
+    expect(classifyWorkerLiveness(null, 95_000, 100_000, 10_000)).toEqual({
+      state: 'running',
+      exitCode: null,
+    });
+  });
+
+  it('classifies a stale or absent heartbeat as an interrupted worker', () => {
+    expect(classifyWorkerLiveness(null, 80_000, 100_000, 10_000).state).toBe('interrupted');
+    expect(classifyWorkerLiveness(null, null, 100_000, 10_000).state).toBe('interrupted');
+  });
+
+  it('lets the durable exit sentinel outrank heartbeat age', () => {
+    expect(classifyWorkerLiveness('0', 1, 100_000, 10_000)).toEqual({ state: 'settled', exitCode: 0 });
+    expect(classifyWorkerLiveness('7', 99_999, 100_000, 10_000)).toEqual({ state: 'settled', exitCode: 7 });
   });
 
   it('never passes --agent', async () => {

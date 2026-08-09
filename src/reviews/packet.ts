@@ -11,6 +11,8 @@ export interface ReviewPacket {
   repositoryInstructions: string;
   diff: string;
   testsChanged: string[];
+  /** Current full-file context for changed text files, capped by the caller. */
+  currentFiles: Record<string, string>;
   ciEvidence: string;
   architectureSummary: string;
 }
@@ -24,6 +26,7 @@ export interface FinalReviewInput {
   architectureSummary: string;
   diff: string;
   changedFiles: string[];
+  currentFiles?: Record<string, string>;
   checks?: ChecksSummary;
   localValidation?: ValidationSummary;
 }
@@ -99,6 +102,9 @@ export function buildFinalReviewPacket(input: FinalReviewInput): ReviewPacket {
     repositoryInstructions: input.agentsMd,
     diff: input.diff,
     testsChanged: input.changedFiles.filter((f) => /(^|\/)(tests?|__tests__|spec)\//i.test(f) || /\.(test|spec)\./i.test(f)),
+    currentFiles: Object.fromEntries(
+      Object.entries(input.currentFiles ?? {}).map(([path, content]) => [path, stripAnchoring(content)]),
+    ),
     ciEvidence: renderCi(input),
     architectureSummary: input.architectureSummary,
   };
@@ -139,6 +145,16 @@ export function renderPacket(packet: ReviewPacket): string {
     '## Tests changed',
     packet.testsChanged.length ? packet.testsChanged.map((t) => `- ${t}`).join('\n') : '(none)',
     '',
+    '## Current changed-file contents',
+    ...(Object.keys(packet.currentFiles).length > 0
+      ? Object.entries(packet.currentFiles).flatMap(([path, content]) => [
+          `### ${path}`,
+          '```',
+          content,
+          '```',
+          '',
+        ])
+      : ['(unavailable)', '']),
     '## Objective validation evidence',
     packet.ciEvidence,
     '',

@@ -18,6 +18,7 @@ function deps(overrides: Partial<RunnerDeps> = {}): RunnerDeps {
     config,
     repos,
     reconcile: vi.fn(async () => 0),
+    curateIssues: vi.fn(async () => 0),
     fetchReadyIssues: vi.fn(async () => []),
     syncMergedPullRequests: vi.fn(async () => []),
     pendingWork: vi.fn(async () => []),
@@ -52,6 +53,10 @@ describe('tick ordering', () => {
         order.push('merges');
         return [];
       }),
+      curateIssues: vi.fn(async () => {
+        order.push('curate');
+        return 1;
+      }),
       fetchReadyIssues: vi.fn(async () => {
         order.push('ready');
         return [];
@@ -59,8 +64,9 @@ describe('tick ordering', () => {
     });
 
     const report = await runSchedulerTick(d);
-    expect(order).toEqual(['reconcile', 'merges', 'ready']);
+    expect(order).toEqual(['reconcile', 'merges', 'curate', 'ready']);
     expect(report.reconciled).toBe(2);
+    expect(report.curated).toBe(1);
   });
 });
 

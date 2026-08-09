@@ -1,8 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import type { ControllerDatabase } from './db.js';
-import type { RunRecord, DependencyRow, ProjectRow, IssueRow } from './types.js';
-import { assertTransitionAllowed, type TransitionEvidence } from '../workflow/transitions.js';
+import type {
+  RunRecord,
+  DependencyRow,
+  ProjectRow,
+  IssueRow,
+  AcceptanceCriterion,
+  Risk,
+  Severity,
+} from './types.js';
+import {
+  assertTransitionAllowed,
+  canRecoverAuthoritatively,
+  type TransitionEvidence,
+} from '../workflow/transitions.js';
 import { isTerminal, type WorkflowState } from '../workflow/states.js';
+import type { CommandOutcome, ValidationSummary } from '../validation/result.js';
+import type { Pressure } from '../routing/types.js';
 
 const ACTIVE_CLAUSE = `state NOT IN ('MERGED','FAILED','CANCELLED')`;
 
@@ -119,6 +133,33 @@ export function createRepositories(db: ControllerDatabase) {
       });
     },
 
+    /** Fast-forwards stale SQLite only from authoritative external evidence. */
+    recoverRunState(runId: string, to: WorkflowState, evidence: TransitionEvidence): RunRecord {
+      return db.transaction(() => {
+        const row = getRun.get(runId) as RunDbRow | undefined;
+        if (!row) throw new Error(`No such run: ${runId}`);
+        const from = row.state as WorkflowState;
+        const facts = (evidence.mechanicalFacts ?? {}) as Record<string, boolean>;
+        if (!canRecoverAuthoritatively(from, to, facts)) {
+          throw new Error(`Recovery cannot authoritatively move ${from} -> ${to}`);
+        }
+
+        if (isTerminal(to)) endRun.run(to, runId);
+        else setRunState.run(to, runId);
+        auditTransition.run(
+          runId,
+          row.issue_id,
+          from,
+          to,
+          evidence.recommendedBy ?? null,
+          evidence.reason,
+          JSON.stringify({ ...facts, authoritativeRecovery: true }),
+        );
+        setIssueState.run(to, row.issue_id);
+        return toRun(getRun.get(runId) as RunDbRow);
+      });
+    },
+
     upsertProject(project: ProjectRow): void {
       db.raw
         .prepare(
@@ -144,7 +185,8 @@ export function createRepositories(db: ControllerDatabase) {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              project_id=excluded.project_id, title=excluded.title,
-             role=excluded.role, risk=excluded.risk, updated_at=datetime('now'),
+             role=COALESCE(excluded.role, issues.role),
+             risk=COALESCE(excluded.risk, issues.risk), updated_at=datetime('now'),
              -- Refresh criteria when the caller supplied some, but never
              -- overwrite a populated set with an empty one: an issue edited
              -- mid-run must not silently lose the yardstick it is graded by.
@@ -174,10 +216,48 @@ export function createRepositories(db: ControllerDatabase) {
       }
     },
 
+    /** Replaces a rough Linear description with the curator's validated contract. */
+    recordCuratedIssue(
+      issueId: string,
+      curated: {
+        title: string;
+        body: string;
+        role: string;
+        risk: Risk;
+        acceptanceCriteria: AcceptanceCriterion[];
+      },
+    ): void {
+      const result = db.raw
+        .prepare(
+          `UPDATE issues SET
+             title = ?, curated_body = ?, role = ?, risk = ?,
+             acceptance_json = ?, state = 'WAITING_READY', updated_at = datetime('now')
+           WHERE id = ?`,
+        )
+        .run(
+          curated.title,
+          curated.body,
+          curated.role,
+          curated.risk,
+          JSON.stringify(curated.acceptanceCriteria),
+          issueId,
+        );
+      if (result.changes !== 1) throw new Error(`Cannot curate unknown issue: ${issueId}`);
+    },
+
     /** Replaces the explicit blocker set for an issue. Linear is authoritative. */
     setDependencies(issueId: string, blockers: string[]): void {
       db.transaction(() => {
-        db.raw.prepare('DELETE FROM issue_dependencies WHERE issue_id = ? AND source = \'linear\'').run(issueId);
+        const current = db.raw
+          .prepare('SELECT blocked_by FROM issue_dependencies WHERE issue_id = ? AND source = \'linear\'')
+          .all(issueId) as Array<{ blocked_by: string }>;
+        const wanted = new Set(blockers);
+        const remove = db.raw.prepare(
+          'DELETE FROM issue_dependencies WHERE issue_id = ? AND blocked_by = ? AND source = \'linear\'',
+        );
+        for (const row of current) {
+          if (!wanted.has(row.blocked_by)) remove.run(issueId, row.blocked_by);
+        }
         const insert = db.raw.prepare(
           `INSERT OR IGNORE INTO issue_dependencies (issue_id, blocked_by, source) VALUES (?, ?, 'linear')`,
         );
@@ -379,9 +459,13 @@ export function createRepositories(db: ControllerDatabase) {
         )
         .get(runId, taskKey) as { id: number } | undefined;
       if (!row) return;
+      const commits = (result as { commits?: Array<{ sha?: string }> })?.commits;
+      const headSha = Array.isArray(commits) && commits.length > 0
+        ? commits[commits.length - 1]?.sha ?? null
+        : null;
       db.raw
-        .prepare(`UPDATE attempts SET result_json = ?, ended_at = datetime('now') WHERE id = ?`)
-        .run(JSON.stringify(result), row.id);
+        .prepare(`UPDATE attempts SET result_json = ?, head_sha = ?, ended_at = datetime('now') WHERE id = ?`)
+        .run(JSON.stringify(result), headSha, row.id);
     },
 
     /**
@@ -424,6 +508,213 @@ export function createRepositories(db: ControllerDatabase) {
       });
     },
 
+    /** Durable per-task attempt count used by interrupted-worker recovery. */
+    workerAttemptCount(runId: string, taskKey: string): number {
+      const row = db.raw
+        .prepare(
+          `SELECT COUNT(*) AS n FROM attempts a
+             JOIN tasks t ON t.id = a.task_id
+            WHERE t.run_id = ? AND t.task_key = ? AND a.role = 'worker'`,
+        )
+        .get(runId, taskKey) as { n: number };
+      return row.n;
+    },
+
+    latestWorkerAttempt(runId: string, taskKey: string): { aliasId: string; isChallenger: boolean; startedAt: string; baseSha: string | null } | null {
+      const row = db.raw
+        .prepare(
+          `SELECT a.alias_id, a.is_challenger, a.started_at, a.base_sha FROM attempts a
+             JOIN tasks t ON t.id = a.task_id
+            WHERE t.run_id = ? AND t.task_key = ? AND a.role = 'worker'
+            ORDER BY a.attempt_no DESC LIMIT 1`,
+        )
+        .get(runId, taskKey) as { alias_id: string; is_challenger: number; started_at: string; base_sha: string | null } | undefined;
+      return row
+        ? { aliasId: row.alias_id, isChallenger: row.is_challenger === 1, startedAt: row.started_at, baseSha: row.base_sha }
+        : null;
+    },
+
+    /** Captured before the external worker starts, so retries have disjoint diffs. */
+    setWorkerAttemptBaseSha(runId: string, taskKey: string, baseSha: string): void {
+      db.raw.prepare(
+        `UPDATE attempts SET base_sha = COALESCE(base_sha, ?) WHERE id = (
+           SELECT a.id FROM attempts a JOIN tasks t ON t.id = a.task_id
+            WHERE t.run_id = ? AND t.task_key = ? AND a.role = 'worker'
+            ORDER BY a.attempt_no DESC LIMIT 1
+         )`,
+      ).run(baseSha, runId, taskKey);
+    },
+
+    /** Persists confirmation only after Orca created, or reports, the terminal. */
+    markWorkerLaunched(runId: string, taskKey: string): void {
+      db.transaction(() => {
+        db.raw.prepare('UPDATE tasks SET state = ? WHERE run_id = ? AND task_key = ?')
+          .run('DISPATCHED', runId, taskKey);
+        db.raw.prepare(
+          `UPDATE attempts SET started_at = ? WHERE id = (
+             SELECT a.id FROM attempts a
+               JOIN tasks t ON t.id = a.task_id
+              WHERE t.run_id = ? AND t.task_key = ? AND a.role = 'worker'
+              ORDER BY a.attempt_no DESC LIMIT 1
+           )`,
+        ).run(new Date().toISOString(), runId, taskKey);
+      });
+    },
+
+    unscoredWorkerAttempts(runId: string): Array<{
+      id: number;
+      taskKey: string;
+      aliasId: string;
+      role: string;
+      startedAt: string;
+      endedAt: string;
+      owns: string[];
+      criteriaIds: string[];
+      orcaWorktreeId: string | null;
+      baseSha: string | null;
+      headSha: string | null;
+      commitShas: string[];
+      succeeded: boolean;
+    }> {
+      const rows = db.raw.prepare(
+        `SELECT a.id, a.alias_id, a.started_at, a.ended_at, a.result_json, a.failure_class,
+                a.base_sha, a.head_sha,
+                t.task_key, t.role, t.owns_json, t.criteria_json, t.orca_worktree_id
+           FROM attempts a
+           JOIN tasks t ON t.id = a.task_id
+          WHERE t.run_id = ? AND a.role = 'worker'
+            AND a.composite_score IS NULL AND a.ended_at IS NOT NULL
+          ORDER BY a.id`,
+      ).all(runId) as Array<{
+        id: number; alias_id: string; started_at: string; ended_at: string;
+        result_json: string | null; failure_class: string | null; task_key: string;
+        role: string | null; owns_json: string; criteria_json: string; orca_worktree_id: string | null;
+        base_sha: string | null; head_sha: string | null;
+      }>;
+      const strings = (json: string): string[] => {
+        try {
+          const value = JSON.parse(json) as unknown;
+          return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+        } catch {
+          return [];
+        }
+      };
+      return rows.map((row) => {
+        let result: { commits?: Array<{ sha?: string }>; exitCode?: number; failureClass?: string } = {};
+        try { result = row.result_json ? JSON.parse(row.result_json) as typeof result : {}; } catch { /* invalid evidence is failure */ }
+        return {
+          id: row.id,
+          taskKey: row.task_key,
+          aliasId: row.alias_id,
+          role: row.role ?? 'routine_behavior',
+          startedAt: row.started_at,
+          endedAt: row.ended_at,
+          owns: strings(row.owns_json),
+          criteriaIds: strings(row.criteria_json),
+          orcaWorktreeId: row.orca_worktree_id,
+          baseSha: row.base_sha,
+          headSha: row.head_sha,
+          commitShas: Array.isArray(result.commits)
+            ? result.commits.map((commit) => commit.sha).filter((sha): sha is string => typeof sha === 'string' && sha.length > 0)
+            : [],
+          succeeded:
+            row.failure_class === null
+            && result.failureClass === undefined
+            && result.exitCode === undefined
+            && Array.isArray(result.commits)
+            && result.commits.length > 0,
+        };
+      });
+    },
+
+    /** Stores one immutable attempt score and updates routing aggregates once. */
+    recordAttemptScore(input: {
+      attemptId: number;
+      projectId: string;
+      role: string;
+      aliasId: string;
+      composite: number;
+      acceptanceCoverage: number;
+      firstPassCi: number;
+      remediationCycles: number;
+      wallClockSeconds: number;
+      resourceCost: number;
+      success: boolean;
+    }): boolean {
+      return db.transaction(() => {
+        const updated = db.raw.prepare(
+          `UPDATE attempts
+              SET composite_score = ?, wall_clock_s = ?, resource_cost = ?
+            WHERE id = ? AND composite_score IS NULL`,
+        ).run(input.composite, input.wallClockSeconds, input.resourceCost, input.attemptId);
+        if (updated.changes !== 1) return false;
+
+        const updateAggregate = (scope: 'global' | 'repository', projectId: string | null) => {
+          const existing = db.raw.prepare(
+            `SELECT id, samples, composite_avg, acceptance_avg, first_pass_ci,
+                    avg_remediations, success_rate
+               FROM routing_stats
+              WHERE scope = ? AND role = ? AND alias_id = ?
+                AND ((? IS NULL AND project_id IS NULL) OR project_id = ?)`,
+          ).get(scope, input.role, input.aliasId, projectId, projectId) as {
+            id: number; samples: number; composite_avg: number | null; acceptance_avg: number | null;
+            first_pass_ci: number | null; avg_remediations: number | null; success_rate: number | null;
+          } | undefined;
+          const prior = existing?.samples ?? 0;
+          const samples = prior + 1;
+          const mean = (oldValue: number | null | undefined, value: number) =>
+            ((oldValue ?? 0) * prior + value) / samples;
+
+          const times = db.raw.prepare(
+            `SELECT a.wall_clock_s AS seconds
+               FROM attempts a
+               JOIN tasks t ON t.id = a.task_id
+               JOIN runs r ON r.id = t.run_id
+              WHERE a.composite_score IS NOT NULL AND a.alias_id = ? AND t.role = ?
+                AND (? IS NULL OR r.repository_id = ?)
+              ORDER BY a.wall_clock_s`,
+          ).all(input.aliasId, input.role, projectId, projectId) as Array<{ seconds: number }>;
+          const minutes = times.map((row) => row.seconds / 60).sort((a, b) => a - b);
+          const middle = Math.floor(minutes.length / 2);
+          const median = minutes.length % 2 === 0
+            ? ((minutes[middle - 1] ?? 0) + (minutes[middle] ?? 0)) / 2
+            : (minutes[middle] ?? 0);
+
+          if (existing) {
+            db.raw.prepare(
+              `UPDATE routing_stats SET samples = ?, composite_avg = ?, acceptance_avg = ?,
+                 first_pass_ci = ?, avg_remediations = ?, median_minutes = ?, success_rate = ?,
+                 updated_at = datetime('now') WHERE id = ?`,
+            ).run(
+              samples,
+              mean(existing.composite_avg, input.composite),
+              mean(existing.acceptance_avg, input.acceptanceCoverage),
+              mean(existing.first_pass_ci, input.firstPassCi),
+              mean(existing.avg_remediations, input.remediationCycles),
+              median,
+              mean(existing.success_rate, input.success ? 1 : 0),
+              existing.id,
+            );
+          } else {
+            db.raw.prepare(
+              `INSERT INTO routing_stats
+                 (scope, project_id, role, alias_id, samples, composite_avg, acceptance_avg,
+                  first_pass_ci, avg_remediations, median_minutes, success_rate)
+               VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              scope, projectId, input.role, input.aliasId, input.composite,
+              input.acceptanceCoverage, input.firstPassCi, input.remediationCycles,
+              median, input.success ? 1 : 0,
+            );
+          }
+        };
+
+        updateAggregate('repository', input.projectId);
+        updateAggregate('global', null);
+        return true;
+      });
+    },
+
     recordReview(runId: string, review: { stage?: string; reviewer?: { id?: string }; verdict: string; findings?: unknown; criteria?: unknown }): void {
       db.raw
         .prepare(
@@ -447,8 +738,20 @@ export function createRepositories(db: ControllerDatabase) {
       issue_id: string;
       stage: 'integration' | 'final';
       reviewer: { id: string };
-      findings: never[];
-      criteria: Array<{ id: string; status: 'satisfied' | 'unsatisfied' | 'uncertain' }>;
+      findings: Array<{
+        severity: Severity;
+        category: string;
+        acceptance_criterion: string | null;
+        file: string;
+        lines?: string;
+        explanation: string;
+        suggested_validation: string;
+      }>;
+      criteria: Array<{
+        id: string;
+        status: 'satisfied' | 'unsatisfied' | 'uncertain';
+        evidence?: string;
+      }>;
     } | null {
       const row = db.raw
         .prepare('SELECT stage, reviewer_alias, verdict, findings_json, criteria_json FROM reviews WHERE run_id = ? ORDER BY id DESC LIMIT 1')
@@ -468,8 +771,8 @@ export function createRepositories(db: ControllerDatabase) {
         issue_id: '',
         stage: row.stage as 'integration' | 'final',
         reviewer: { id: row.reviewer_alias },
-        findings: parse(row.findings_json, [] as never[]),
-        criteria: parse(row.criteria_json, [] as Array<{ id: string; status: 'satisfied' | 'unsatisfied' | 'uncertain' }>),
+        findings: parse(row.findings_json, []),
+        criteria: parse(row.criteria_json, []),
       };
     },
 
@@ -482,16 +785,79 @@ export function createRepositories(db: ControllerDatabase) {
         .run(runId, summary.passed ? 'success' : 'failure', JSON.stringify(summary.results));
     },
 
-    lastValidation(runId: string): { passed: boolean; failedRequired: string[]; results: Array<{ name: string; passed: boolean }> } | null {
+    /** Persists objective remote-CI observations without duplicating polling snapshots. */
+    recordCiObservation(runId: string, input: {
+      headSha: string;
+      complete: boolean;
+      allRequiredPassed: boolean;
+      checks: unknown[];
+    }): void {
+      const status = input.complete ? 'completed' : 'pending';
+      const conclusion = input.complete ? (input.allRequiredPassed ? 'success' : 'failure') : null;
+      const checks = JSON.stringify(input.checks);
+      const latest = db.raw.prepare(
+        `SELECT head_sha, status, conclusion, checks_json FROM ci_runs
+          WHERE run_id = ? AND head_sha != 'local' ORDER BY id DESC LIMIT 1`,
+      ).get(runId) as { head_sha: string; status: string; conclusion: string | null; checks_json: string } | undefined;
+      if (latest?.head_sha === input.headSha && latest.status === status
+        && latest.conclusion === conclusion && latest.checks_json === checks) return;
+      db.raw.prepare(
+        `INSERT INTO ci_runs (run_id, head_sha, status, conclusion, checks_json)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(runId, input.headSha, status, conclusion, checks);
+    },
+
+    /** Remote CI only. Local validation and review remediation are separate evidence. */
+    ciFailureCount(runId: string): { observed: boolean; failures: number } {
+      const rows = db.raw.prepare(
+        `SELECT head_sha, conclusion, checks_json FROM ci_runs
+          WHERE run_id = ? AND head_sha != 'local' AND status = 'completed'
+          ORDER BY id`,
+      ).all(runId) as Array<{ head_sha: string; conclusion: string | null; checks_json: string }>;
+      const failures = new Set<string>();
+      const passing = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+      for (const row of rows) {
+        let checks: Array<{ name?: string; required?: boolean; conclusion?: string | null; githubRunId?: number }> = [];
+        try { checks = JSON.parse(row.checks_json) as typeof checks; } catch { /* malformed evidence is not counted */ }
+        for (const check of checks) {
+          if (check.required === false || !check.conclusion || passing.has(check.conclusion)) continue;
+          failures.add(check.githubRunId !== undefined
+            ? `run:${check.githubRunId}`
+            : `check:${row.head_sha}:${check.name ?? '(unnamed)'}:${check.conclusion}`);
+        }
+      }
+      return {
+        observed: rows.length > 0,
+        failures: failures.size,
+      };
+    },
+
+    ciRetryRequested(runId: string, githubRunId: number): boolean {
+      const row = db.raw
+        .prepare(`SELECT 1 FROM ci_runs WHERE run_id = ? AND github_run_id = ? AND status = 'rerun_requested' LIMIT 1`)
+        .get(runId, githubRunId);
+      return row !== undefined;
+    },
+
+    recordCiRetry(runId: string, headSha: string, githubRunId: number, checks: unknown[]): void {
+      db.raw
+        .prepare(
+          `INSERT INTO ci_runs (run_id, head_sha, github_run_id, status, conclusion, checks_json)
+           VALUES (?, ?, ?, 'rerun_requested', NULL, ?)`,
+        )
+        .run(runId, headSha, githubRunId, JSON.stringify(checks));
+    },
+
+    lastValidation(runId: string): ValidationSummary | null {
       const row = db.raw
         .prepare(`SELECT conclusion, checks_json FROM ci_runs WHERE run_id = ? AND head_sha = 'local' ORDER BY id DESC LIMIT 1`)
         .get(runId) as { conclusion: string; checks_json: string } | undefined;
       if (!row) return null;
       try {
-        const results = JSON.parse(row.checks_json) as Array<{ name: string; passed: boolean }>;
+        const results = JSON.parse(row.checks_json) as CommandOutcome[];
         return {
           passed: row.conclusion === 'success',
-          failedRequired: results.filter((r) => !r.passed).map((r) => r.name),
+          failedRequired: results.filter((r) => r.required && !r.passed).map((r) => r.name),
           results,
         };
       } catch {
@@ -551,11 +917,12 @@ export function createRepositories(db: ControllerDatabase) {
       aliasId: string;
       samples: number;
       compositeAvg: number | null;
+      firstPassCi: number | null;
       successRate: number | null;
     }> {
       return db.raw
         .prepare(
-          'SELECT scope, project_id, role, alias_id, samples, composite_avg, success_rate FROM routing_stats ORDER BY role, composite_avg DESC',
+          'SELECT scope, project_id, role, alias_id, samples, composite_avg, first_pass_ci, success_rate FROM routing_stats ORDER BY role, composite_avg DESC',
         )
         .all()
         .map((r) => {
@@ -566,6 +933,7 @@ export function createRepositories(db: ControllerDatabase) {
             alias_id: string;
             samples: number;
             composite_avg: number | null;
+            first_pass_ci: number | null;
             success_rate: number | null;
           };
           return {
@@ -575,6 +943,7 @@ export function createRepositories(db: ControllerDatabase) {
             aliasId: row.alias_id,
             samples: row.samples,
             compositeAvg: row.composite_avg,
+            firstPassCi: row.first_pass_ci,
             successRate: row.success_rate,
           };
         });
@@ -588,11 +957,28 @@ export function createRepositories(db: ControllerDatabase) {
       return row?.curated_body ?? null;
     },
 
+    issueRouting(issueId: string): { role: string; risk: Risk } {
+      const row = db.raw.prepare('SELECT role, risk FROM issues WHERE id = ?').get(issueId) as
+        | { role: string | null; risk: Risk | null }
+        | undefined;
+      return {
+        role: row?.role ?? 'routine_behavior',
+        risk: row?.risk ?? 'low',
+      };
+    },
+
     issueUrl(issueId: string): string | null {
       const row = db.raw.prepare('SELECT url FROM issues WHERE id = ?').get(issueId) as
         | { url: string | null }
         | undefined;
       return row?.url ?? null;
+    },
+
+    issueTitle(issueId: string): string | null {
+      const row = db.raw.prepare('SELECT title FROM issues WHERE id = ?').get(issueId) as
+        | { title: string | null }
+        | undefined;
+      return row?.title ?? null;
     },
 
     acceptanceCriteria(issueId: string): Array<{ id: string; statement: string }> {
@@ -685,13 +1071,18 @@ export function createRepositories(db: ControllerDatabase) {
         });
     },
 
-    /** Counts REMEDIATING entries in the audit trail, which is the only
-     *  record that cannot be lost to a restart. */
+    /** Counts remediation waves that were actually materialised as tasks.
+     *  State transitions can include recovery and operator corrections; using
+     *  them as budget consumption blocked JP-9 before any repair worker ran. */
     remediationCycles(runId: string): number {
-      const row = db.raw
-        .prepare(`SELECT COUNT(*) AS n FROM state_transitions WHERE run_id = ? AND to_state = 'REMEDIATING'`)
-        .get(runId) as { n: number };
-      return row.n;
+      const rows = db.raw
+        .prepare(`SELECT task_key FROM tasks WHERE run_id = ? AND task_key LIKE 'remediation-%'`)
+        .all(runId) as Array<{ task_key: string }>;
+      return new Set(
+        rows
+          .map((row) => /^remediation-(\d+)-/.exec(row.task_key)?.[1])
+          .filter((cycle): cycle is string => cycle !== undefined),
+      ).size;
     },
 
     recordEscalation(issueId: string, runId: string, trigger: string, question: string): void {
@@ -700,6 +1091,80 @@ export function createRepositories(db: ControllerDatabase) {
           'INSERT INTO human_escalations (issue_id, run_id, trigger, question) VALUES (?, ?, ?, ?)',
         )
         .run(issueId, runId, trigger, question);
+    },
+
+    setProviderPressure(
+      provider: string,
+      value: {
+        pressure: Pressure;
+        remainingAllowance: number | null;
+        source: string;
+        manualOverride: boolean;
+        resetAt: string | null;
+      },
+    ): void {
+      db.raw
+        .prepare(
+          `INSERT INTO provider_pressure
+             (provider, pressure, remaining_allowance, source, manual_override, reset_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(provider) DO UPDATE SET
+             pressure = excluded.pressure,
+             remaining_allowance = excluded.remaining_allowance,
+             source = excluded.source,
+             manual_override = excluded.manual_override,
+             reset_at = excluded.reset_at,
+             updated_at = datetime('now')`,
+        )
+        .run(
+          provider,
+          value.pressure,
+          value.remainingAllowance,
+          value.source,
+          value.manualOverride ? 1 : 0,
+          value.resetAt,
+        );
+    },
+
+    activeProviderPressures(now = new Date()): Array<{
+      provider: string;
+      pressure: Pressure;
+      remainingAllowance: number | null;
+      source: string;
+      manualOverride: boolean;
+      resetAt: string | null;
+    }> {
+      const instant = now.toISOString();
+      db.raw
+        .prepare(
+          `DELETE FROM provider_pressure
+           WHERE manual_override = 0 AND reset_at IS NOT NULL AND reset_at <= ?`,
+        )
+        .run(instant);
+      return db.raw
+        .prepare(
+          `SELECT provider, pressure, remaining_allowance, source, manual_override, reset_at
+           FROM provider_pressure ORDER BY provider`,
+        )
+        .all()
+        .map((value) => {
+          const row = value as {
+            provider: string;
+            pressure: Pressure;
+            remaining_allowance: number | null;
+            source: string | null;
+            manual_override: number;
+            reset_at: string | null;
+          };
+          return {
+            provider: row.provider,
+            pressure: row.pressure,
+            remainingAllowance: row.remaining_allowance,
+            source: row.source ?? 'persisted',
+            manualOverride: row.manual_override === 1,
+            resetAt: row.reset_at,
+          };
+        });
     },
 
     openEscalations(): Array<{ issueId: string; trigger: string; question: string }> {

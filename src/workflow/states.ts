@@ -91,7 +91,9 @@ export const MAINLINE_TRANSITIONS: Readonly<Record<WorkflowState, readonly Workf
   CI: ['FINAL_REVIEW', 'REMEDIATING'],
   FINAL_REVIEW: ['REMEDIATING', 'PR_READY'],
   REMEDIATING: ['IMPLEMENTING', 'INTEGRATING', 'LOCAL_VALIDATION', 'CI', 'FINAL_REVIEW'],
-  PR_READY: ['PR_OPEN'],
+  // FINAL_REVIEW is a recovery edge for a persisted review that proves
+  // incomplete or inconsistent when PR_READY revalidates it after restart.
+  PR_READY: ['FINAL_REVIEW', 'PR_OPEN'],
   PR_OPEN: ['MERGED'],
   MERGED: [],
   NEEDS_CONTEXT: ['CURATING', 'WAITING_READY'],
@@ -114,6 +116,7 @@ export function nextAfterLocalValidation(trigger: CiTrigger): WorkflowState {
 
 export const AI_LIFECYCLE_LABELS = [
   'ai-curate',
+  'ai-curated',
   'ai-needs-context',
   'ai-ready',
   'ai-running',
@@ -135,7 +138,7 @@ export type AiLifecycleLabel = (typeof AI_LIFECYCLE_LABELS)[number];
 export const LINEAR_PROJECTION: Readonly<Record<WorkflowState, AiLifecycleLabel | null>> = {
   DISCOVERED: 'ai-curate',
   CURATING: 'ai-curate',
-  WAITING_READY: 'ai-needs-context',
+  WAITING_READY: 'ai-curated',
   NEEDS_CONTEXT: 'ai-needs-context',
   QUEUED: 'ai-running',
   PLANNING: 'ai-running',

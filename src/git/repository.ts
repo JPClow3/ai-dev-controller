@@ -110,6 +110,21 @@ export function createGit(git: GitRunner = realGit) {
       return git(repoPath, ['rev-parse', `origin/${baseBranch}`]);
     },
 
+    /**
+     * Pins a newly-created controller worktree to the exact fetched base.
+     *
+     * Orca's `--base-branch main` resolves the local branch, which may lag
+     * `origin/main` even after fetch. A fast-forward merge preserves the
+     * controller branch and refuses divergence instead of rewriting history.
+     */
+    async fastForwardTo(repoPath: string, sha: string): Promise<void> {
+      await git(repoPath, ['merge', '--ff-only', sha]);
+      const head = await git(repoPath, ['rev-parse', 'HEAD']);
+      if (head !== sha) {
+        throw new Error(`worktree HEAD ${head} does not match fetched base ${sha}`);
+      }
+    },
+
     async currentBranch(repoPath: string): Promise<string> {
       return git(repoPath, ['symbolic-ref', '--short', 'HEAD']);
     },
@@ -128,6 +143,19 @@ export function createGit(git: GitRunner = realGit) {
       }
     },
 
+    /**
+     * Checks the remote directly instead of trusting a possibly stale
+     * `refs/remotes/origin/*` left behind before the controller restarted.
+     */
+    async remoteBranchExists(repoPath: string, branch: string): Promise<boolean> {
+      try {
+        const out = await git(repoPath, ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`]);
+        return out.trim().length > 0;
+      } catch {
+        return false;
+      }
+    },
+
     async headSha(repoPath: string): Promise<string> {
       return git(repoPath, ['rev-parse', 'HEAD']);
     },
@@ -141,6 +169,16 @@ export function createGit(git: GitRunner = realGit) {
       });
     },
 
+    /** True when HEAD already contains an exact or patch-equivalent commit. */
+    async patchPresent(repoPath: string, sha: string): Promise<boolean> {
+      try {
+        const state = await git(repoPath, ['cherry', 'HEAD', sha]);
+        return state.trimStart().startsWith('-');
+      } catch {
+        return false;
+      }
+    },
+
     async diffAgainst(repoPath: string, baseSha: string): Promise<string> {
       return git(repoPath, ['diff', `${baseSha}...HEAD`]);
     },
@@ -150,6 +188,24 @@ export function createGit(git: GitRunner = realGit) {
       baseSha: string,
     ): Promise<Array<{ path: string; insertions: number; deletions: number }>> {
       const out = await git(repoPath, ['diff', '--numstat', `${baseSha}...HEAD`]);
+      if (!out) return [];
+      return out.split('\n').map((line) => {
+        const [ins, del, path] = line.split('\t');
+        return {
+          path: path ?? '',
+          insertions: Number.parseInt(ins ?? '0', 10) || 0,
+          deletions: Number.parseInt(del ?? '0', 10) || 0,
+        };
+      });
+    },
+
+    /** Exact two-ref diff used to attribute churn to one worker attempt. */
+    async changedFilesBetween(
+      repoPath: string,
+      baseSha: string,
+      headSha: string,
+    ): Promise<Array<{ path: string; insertions: number; deletions: number }>> {
+      const out = await git(repoPath, ['diff', '--numstat', `${baseSha}..${headSha}`]);
       if (!out) return [];
       return out.split('\n').map((line) => {
         const [ins, del, path] = line.split('\t');

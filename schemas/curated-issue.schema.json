@@ -21,7 +21,7 @@
     },
     "task_category": {
       "type": "string",
-      "description": "Key from config/routing.yaml -> matrix"
+      "description": "Key from config/routing.yaml -> roles"
     },
     "risk": { "enum": ["low", "medium", "high"] },
     "acceptance_criteria": {

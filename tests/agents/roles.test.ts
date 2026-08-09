@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { AGENT_ROLES, createAgents, reviewerCandidates } from '../../src/agents/roles.js';
 import { loadControllerConfig } from '../../src/config/load-config.js';
 import type { Invoker } from '../../src/agents/invoke.js';
+import { ProviderQuotaExhaustedError } from '../../src/routing/quota.js';
 
 const ROOT = process.cwd();
 const config = loadControllerConfig(ROOT);
@@ -116,5 +117,42 @@ describe('final review independence', () => {
     for (const alias of candidates) expect(config.routing.aliases[alias]).toBeDefined();
     // local_smoke is not referenced by any role, so it must never review.
     expect(candidates).not.toContain('local_smoke');
+  });
+
+  it('falls back to another eligible alias when one reviewer profile exhausts quota', async () => {
+    const structured = vi.fn(async (request: { alias: string }) => {
+      if (request.alias === 'luna_low') throw new Error('Codex quota exhausted for profile gpt-luna-low');
+      return { data: { verdict: 'approve' }, alias: request.alias, attempts: 1, wallClockMs: 1, raw: '{}' };
+    });
+    const agents = createAgents({ structured } as unknown as Invoker, config.routing);
+
+    const result = await agents.reviewFinal(
+      { byFamily: { openai: 1 } },
+      ['luna_low', 'terra_high'],
+      'packet',
+    );
+
+    expect(result.alias).toBe('terra_high');
+    expect(structured.mock.calls.map((call) => call[0].alias)).toEqual(['luna_low', 'terra_high']);
+  });
+
+  it('preserves a shared provider cooldown when every reviewer exhausts quota', async () => {
+    const resetAt = new Date('2026-08-15T22:14:00.000Z');
+    const structured = vi.fn(async (request: { alias: string }) => {
+      throw new ProviderQuotaExhaustedError('chatgpt', resetAt, request.alias);
+    });
+    const agents = createAgents({ structured } as unknown as Invoker, config.routing);
+
+    await expect(
+      agents.reviewFinal(
+        { byFamily: { openai: 1 } },
+        ['luna_low', 'terra_high'],
+        'packet',
+      ),
+    ).rejects.toMatchObject({
+      name: 'ProviderQuotaExhaustedError',
+      provider: 'chatgpt',
+      resetAt,
+    });
   });
 });

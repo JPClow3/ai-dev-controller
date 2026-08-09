@@ -179,6 +179,7 @@ export async function dispatchNewIssue(
     baseBranch,
     linearIssue: input.issueId,
   });
+  await deps.git.fastForwardTo(worktree.path, baseSha);
 
   // Without this the run row keeps a NULL branch, base sha and worktree id,
   // and the very next step interpolates "id:null" into an Orca selector and
@@ -241,12 +242,13 @@ export function createDispatcher(deps: DispatchDeps) {
 
     const project = deps.config.registry.projects[projectId];
     if (!project) return;
+    const issueRouting = deps.repos.issueRouting(item.issueId);
 
     await dispatchNewIssue(deps, {
       issueId: item.issueId,
       projectId,
-      role: 'routine_behavior',
-      risk: 'low',
+      role: issueRouting.role,
+      risk: issueRouting.risk,
       slug: project.repository.github,
     });
   };

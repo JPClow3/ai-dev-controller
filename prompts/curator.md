@@ -45,7 +45,7 @@ No prose outside the JSON.
 4. **Always include a regression criterion** for behaviour the change could break.
 5. **Risk** is one of `low`, `medium`, `high`. Authentication, sessions, billing,
    migrations, permissions and infrastructure are never `low`.
-6. **Task category** must be one of the keys in `config/routing.yaml -> matrix`.
+6. **Task category** must be one of the keys in `config/routing.yaml -> roles`.
    This drives model routing, so choose it deliberately.
 
 ## Dependency proposals

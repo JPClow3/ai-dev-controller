@@ -12,6 +12,7 @@ export interface TickReport {
   startedAt: string;
   durationMs: number;
   reconciled: number;
+  curated: number;
   readyIssues: string[];
   blockedIssues: Array<{ identifier: string; waitingOn: string[] }>;
   cycles: string[][];
@@ -30,6 +31,8 @@ export interface RunnerDeps {
   repos: ControllerRepositories;
 
   reconcile: () => Promise<number>;
+  /** Rough `ai-curate` issues processed before implementation scheduling. */
+  curateIssues: () => Promise<number>;
   /** Issues carrying `ai-ready`, plus their explicit blockers. */
   fetchReadyIssues: () => Promise<
     Array<{
@@ -60,11 +63,12 @@ export interface RunnerDeps {
  * Order matters and is not arbitrary:
  *   1. reconcile   — the DB is memory, not truth; re-derive reality first
  *   2. merges      — a merge is the only thing that unblocks downstream work
- *   3. ai-ready    — the human gate, read but never written
- *   4. waves       — recomputed from real merge state every tick
- *   5. capacity    — hard limits
- *   6. priority    — finish things before starting things
- *   7. dispatch
+ *   3. curation    — improve rough issues, stopping before the human gate
+ *   4. ai-ready    — the human gate, read but never written
+ *   5. waves       — recomputed from real merge state every tick
+ *   6. capacity    — hard limits
+ *   7. priority    — finish things before starting things
+ *   8. dispatch
  */
 export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
   const started = Date.now();
@@ -75,6 +79,8 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
   // A merged PR satisfies blockers. Nothing else does.
   const merged = await deps.syncMergedPullRequests();
   for (const issueId of merged) deps.repos.markDependencySatisfiedByMerge(issueId);
+
+  const curated = await deps.curateIssues();
 
   const ready = await deps.fetchReadyIssues();
   const needsContext: string[] = [];
@@ -205,6 +211,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
     startedAt,
     durationMs: Date.now() - started,
     reconciled,
+    curated,
     readyIssues: wave.issues,
     blockedIssues: wave.blocked,
     cycles,
@@ -251,7 +258,7 @@ export async function runLoop(deps: RunnerDeps, options: LoopOptions = {}): Prom
       const report = await runSchedulerTick(deps);
       reports.push(report);
       log.info(
-        `tick: ${report.dispatched.length} dispatched, ${report.readyIssues.length} ready, ` +
+        `tick: ${report.curated} curated, ${report.dispatched.length} dispatched, ${report.readyIssues.length} ready, ` +
           `${report.blockedIssues.length} blocked${report.throttled ? ', THROTTLED' : ''}`,
       );
     } catch (err) {
