@@ -37,6 +37,66 @@ function readYaml(rootDir: string, relative: string): unknown {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function localRegistryError(issue: string): ConfigError {
+  return new ConfigError('projects/registry.local.yaml', [issue]);
+}
+
+function mergeLocalRegistry(
+  committed: Record<string, unknown>,
+  local: Record<string, unknown>,
+): Record<string, unknown> {
+  if ('groups' in local) {
+    throw localRegistryError('groups: local registry cannot override groups');
+  }
+
+  for (const key of Object.keys(local)) {
+    if (key !== 'projects') {
+      throw localRegistryError(`${key}: local registry may only override repository.path`);
+    }
+  }
+
+  const localProjects = local.projects;
+  if (localProjects === undefined) return committed;
+  if (!isRecord(localProjects)) {
+    throw localRegistryError('projects: local registry projects must be a mapping');
+  }
+
+  const committedProjects = committed.projects;
+  if (!isRecord(committedProjects)) return committed;
+
+  const mergedProjects = { ...committedProjects };
+  for (const [projectId, override] of Object.entries(localProjects)) {
+    const committedProject = committedProjects[projectId];
+    if (!isRecord(committedProject)) {
+      throw localRegistryError(`projects.${projectId}: unknown project "${projectId}"`);
+    }
+    if (!isRecord(override) || Object.keys(override).length !== 1 || !('repository' in override)) {
+      throw localRegistryError(`projects.${projectId}: local registry may only override repository.path`);
+    }
+
+    const repository = override.repository;
+    if (!isRecord(repository) || Object.keys(repository).length !== 1 || !('path' in repository)) {
+      throw localRegistryError(`projects.${projectId}: local registry may only override repository.path`);
+    }
+    if (typeof repository.path !== 'string') {
+      throw localRegistryError(`projects.${projectId}.repository.path: repository.path must be a string`);
+    }
+
+    const committedRepository = committedProject.repository;
+    if (!isRecord(committedRepository)) return committed;
+    mergedProjects[projectId] = {
+      ...committedProject,
+      repository: { ...committedRepository, path: repository.path },
+    };
+  }
+
+  return { ...committed, projects: mergedProjects };
+}
+
 // Generic over the schema, not its output: every config schema is a
 // ZodEffects (it transforms snake_case to camelCase), and `ZodType<T>` would
 // force TypeScript to unify the input and output shapes.
@@ -54,8 +114,8 @@ function parseWith<S extends z.ZodTypeAny>(schema: S, relative: string, raw: unk
  * than starting with a half-valid policy — a controller running on partially
  * defaulted routing rules is worse than one that refuses to start.
  *
- * `config/local.yaml` and `projects/registry.local.yaml` are gitignored
- * operator overrides, shallow-merged over the committed defaults.
+ * `config/local.yaml` is a shallow operator override. The gitignored
+ * `projects/registry.local.yaml` can only override existing repository paths.
  */
 export function loadControllerConfig(rootDir: string): ControllerConfig {
   const globalRaw = readYaml(rootDir, 'config/global.yaml') as Record<string, unknown>;
@@ -66,9 +126,20 @@ export function loadControllerConfig(rootDir: string): ControllerConfig {
 
   const mergedGlobal = localRaw ? { ...globalRaw, ...localRaw } : globalRaw;
 
-  const registryRelative = existsSync(resolve(rootDir, 'projects/registry.local.yaml'))
-    ? 'projects/registry.local.yaml'
-    : 'projects/registry.yaml';
+  const committedRegistry = readYaml(rootDir, 'projects/registry.yaml');
+  const localRegistryPath = resolve(rootDir, 'projects/registry.local.yaml');
+  const localRegistry = existsSync(localRegistryPath)
+    ? readYaml(rootDir, 'projects/registry.local.yaml')
+    : undefined;
+  let mergedRegistry = committedRegistry;
+  if (localRegistry !== undefined) {
+    if (!isRecord(localRegistry)) {
+      throw localRegistryError('local registry must be a mapping');
+    }
+    if (isRecord(committedRegistry)) {
+      mergedRegistry = mergeLocalRegistry(committedRegistry, localRegistry);
+    }
+  }
 
   return {
     rootDir,
@@ -80,7 +151,7 @@ export function loadControllerConfig(rootDir: string): ControllerConfig {
       readYaml(rootDir, 'config/escalation.yaml'),
     ),
     scoring: parseWith(scoringConfigSchema, 'config/scoring.yaml', readYaml(rootDir, 'config/scoring.yaml')),
-    registry: parseWith(projectRegistrySchema, registryRelative, readYaml(rootDir, registryRelative)),
+    registry: parseWith(projectRegistrySchema, 'projects/registry.yaml', mergedRegistry),
   };
 }
 

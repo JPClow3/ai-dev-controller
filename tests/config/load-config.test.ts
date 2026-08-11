@@ -93,6 +93,59 @@ wall_clock:
     expect(() => loadControllerConfig(dir)).toThrow(/sum to 1\.0/);
   });
 
+  it('overlays a local repository path while retaining committed metadata', () => {
+    const dir = scratchRoot();
+    writeFileSync(
+      join(dir, 'projects/registry.local.yaml'),
+      `projects:\n  lorebound:\n    repository:\n      path: C:/Code/Pessoais/Lorebound\n`,
+    );
+
+    const project = loadControllerConfig(dir).registry.projects.lorebound!;
+    expect(project.repository.path).toBe('C:/Code/Pessoais/Lorebound');
+    expect(project.repository.github).toBe('JPClow3/Lorebound');
+    expect(project.repository.baseBranch).toBe('main');
+  });
+
+  it('rejects a local path override for an unknown project', () => {
+    const dir = scratchRoot();
+    writeFileSync(
+      join(dir, 'projects/registry.local.yaml'),
+      `projects:\n  missing:\n    repository:\n      path: C:/Code/missing\n`,
+    );
+
+    expect(() => loadControllerConfig(dir)).toThrow(/unknown project "missing"/);
+  });
+
+  it('rejects local registry group overrides', () => {
+    const dir = scratchRoot();
+    writeFileSync(
+      join(dir, 'projects/registry.local.yaml'),
+      `groups: {}\n`,
+    );
+
+    expect(() => loadControllerConfig(dir)).toThrow(/cannot override groups/);
+  });
+
+  it('rejects local registry fields other than project repository paths', () => {
+    const dir = scratchRoot();
+    writeFileSync(
+      join(dir, 'projects/registry.local.yaml'),
+      `projects:\n  lorebound:\n    enabled: false\n`,
+    );
+
+    expect(() => loadControllerConfig(dir)).toThrow(/only override repository\.path/);
+  });
+
+  it('rejects a non-string local repository path', () => {
+    const dir = scratchRoot();
+    writeFileSync(
+      join(dir, 'projects/registry.local.yaml'),
+      `projects:\n  lorebound:\n    repository:\n      path: 42\n`,
+    );
+
+    expect(() => loadControllerConfig(dir)).toThrow(/repository\.path must be a string/);
+  });
+
   it('rejects negative scoring weights even when their total still equals 1.0', () => {
     const dir = scratchRoot();
     const path = join(dir, 'config/scoring.yaml');
