@@ -41,6 +41,14 @@ describe('migrations', () => {
     expect(idx).toBeTruthy();
   });
 
+  it('persists singleton controller watermarks', () => {
+    expect(repos.getControllerMeta('linear.auto_curate_after')).toBeNull();
+    repos.setControllerMeta('linear.auto_curate_after', '2026-08-11T12:00:00.000Z');
+    expect(repos.getControllerMeta('linear.auto_curate_after')).toBe('2026-08-11T12:00:00.000Z');
+    repos.setControllerMeta('linear.auto_curate_after', '2026-08-11T13:00:00.000Z');
+    expect(repos.getControllerMeta('linear.auto_curate_after')).toBe('2026-08-11T13:00:00.000Z');
+  });
+
   it('persists provider cooldowns and expires transport-derived ones', () => {
     repos.setProviderPressure('chatgpt', {
       pressure: 'EXHAUSTED',

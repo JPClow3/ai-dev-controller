@@ -16,8 +16,15 @@ import {
   isProviderQuotaExhausted,
   refreshRuntimePressure,
 } from '../routing/quota.js';
-import { listIssuesByLabel, getIssueContract, updateIssueContract, commentOnIssue } from '../linear/issues.js';
+import {
+  listIssuesByLabel,
+  listIssuesCreatedBetween,
+  getIssueContract,
+  updateIssueContract,
+  commentOnIssue,
+} from '../linear/issues.js';
 import { clearAiLifecycleLabels, setAiLifecycleLabel } from '../linear/labels.js';
+import { AUTO_CURATE_CURSOR_KEY, autoCurateNewIssues } from '../linear/auto-curate.js';
 import { postBlockerQuestion } from '../linear/dependencies.js';
 import {
   findPullRequestByBranch,
@@ -504,6 +511,47 @@ export function buildController(options: WiringOptions) {
       const recovery = await recoverReality();
       const recovered = new Set(recovery.appliedRunIds);
       return recovered.size + (await advanceAll(recovered));
+    },
+
+    async adoptNewIssues() {
+      // Dry runs must not consume the durable watermark: the same issues need
+      // to remain visible when the controller is restarted with writes on.
+      if (!writeToLinear) return 0;
+      const report = await autoCurateNewIssues({
+        getCursor: () => repos.getControllerMeta(AUTO_CURATE_CURSOR_KEY),
+        setCursor: (value) => repos.setControllerMeta(AUTO_CURATE_CURSOR_KEY, value),
+        fetchIssues: listIssuesCreatedBetween,
+        resolveRepository(issue) {
+          const resolution = resolveRepository(issue, config.registry);
+          if (!resolution.ok) {
+            return {
+              ok: false,
+              message: resolution.message,
+              candidates: resolution.candidates,
+            };
+          }
+          return {
+            ok: true,
+            projectId: resolution.projectId,
+            context: projectKnowledge(resolution.projectId),
+          };
+        },
+        setLifecycle: setAiLifecycleLabel,
+        async requestContext(identifier, message, candidates) {
+          await commentOnIssue(
+            identifier,
+            [
+              'AI controller could not resolve a repository for this new issue:',
+              `- ${message}`,
+              ...(candidates?.length ? [`- Candidate repositories: ${candidates.join(', ')}`] : []),
+            ].join('\n'),
+          );
+        },
+      });
+      for (const identifier of report.needsContext) {
+        log.warn(`${identifier}: new issue needs repository context`);
+      }
+      return report.adopted.length + report.needsContext.length;
     },
 
     async curateIssues() {

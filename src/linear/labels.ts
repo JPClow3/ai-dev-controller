@@ -2,24 +2,13 @@ import type { AiLifecycleLabel } from '../workflow/states.js';
 import { AI_LIFECYCLE_LABELS } from '../workflow/states.js';
 import { getLinearClient } from './client.js';
 
-/**
- * `ai-ready` is a human input. The controller reads it and never writes it —
- * that gate is the entire boundary between "AI improved my ticket" and "AI is
- * allowed to change my repository".
- */
-export const CONTROLLER_WRITABLE_LABELS: readonly AiLifecycleLabel[] = AI_LIFECYCLE_LABELS.filter(
-  (l) => l !== 'ai-ready',
-);
-
-export class ForbiddenLabelWrite extends Error {
-  constructor(label: string) {
-    super(`The controller may never apply "${label}". Only a human authorises implementation.`);
-    this.name = 'ForbiddenLabelWrite';
-  }
-}
+/** The controller owns the complete ai-* lifecycle through draft PR creation. */
+export const CONTROLLER_WRITABLE_LABELS: readonly AiLifecycleLabel[] = AI_LIFECYCLE_LABELS;
 
 export function assertLabelWritable(label: AiLifecycleLabel): void {
-  if (!CONTROLLER_WRITABLE_LABELS.includes(label)) throw new ForbiddenLabelWrite(label);
+  if (!CONTROLLER_WRITABLE_LABELS.includes(label)) {
+    throw new Error(`The controller does not own lifecycle label "${label}".`);
+  }
 }
 
 /** Fails startup before curation can persist only half of its Linear write. */

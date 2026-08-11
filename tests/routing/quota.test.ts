@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   applyQuotaCooldown,
   ProviderQuotaExhaustedError,
+  QUOTA_RECHECK_INTERVAL_MS,
   quotaResetAtFromOutput,
   refreshRuntimePressure,
 } from '../../src/routing/quota.js';
@@ -33,16 +34,17 @@ describe('Codex quota exhaustion', () => {
     expect(error.message).toContain('gpt-terra-high');
   });
 
-  it('persists the cooldown and immediately removes the provider from routing', () => {
+  it('persists a bounded cooldown and immediately removes the provider from routing', () => {
     const pressure = defaultPressure(routing);
     const setProviderPressure = vi.fn();
     const resetAt = new Date('2026-08-15T22:14:00.000Z');
+    const now = new Date('2026-08-09T02:40:00.000Z');
 
     applyQuotaCooldown(
       { setProviderPressure },
       pressure,
       new ProviderQuotaExhaustedError('chatgpt', resetAt, 'reviewers'),
-      new Date('2026-08-09T02:40:00.000Z'),
+      now,
     );
 
     expect(pressure['chatgpt']).toMatchObject({
@@ -50,6 +52,28 @@ describe('Codex quota exhaustion', () => {
       source: 'transport_quota',
       remainingAllowance: 0,
     });
+    expect(setProviderPressure).toHaveBeenCalledWith(
+      'chatgpt',
+      expect.objectContaining({
+        resetAt: new Date(now.getTime() + QUOTA_RECHECK_INTERVAL_MS).toISOString(),
+      }),
+    );
+  });
+
+  it('honours a provider reset that occurs before the periodic recheck', () => {
+    const pressure = defaultPressure(routing);
+    const setProviderPressure = vi.fn();
+    const now = new Date('2026-08-09T02:40:00.000Z');
+    const resetAt = new Date(now.getTime() + 5 * 60_000);
+
+    const retryAt = applyQuotaCooldown(
+      { setProviderPressure },
+      pressure,
+      new ProviderQuotaExhaustedError('chatgpt', resetAt, 'reviewers'),
+      now,
+    );
+
+    expect(retryAt).toEqual(resetAt);
     expect(setProviderPressure).toHaveBeenCalledWith(
       'chatgpt',
       expect.objectContaining({ resetAt: resetAt.toISOString() }),

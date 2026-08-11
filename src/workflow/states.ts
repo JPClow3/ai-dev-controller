@@ -133,12 +133,14 @@ export type AiLifecycleLabel = (typeof AI_LIFECYCLE_LABELS)[number];
  * for CI, and telling you a PR is ready when it has not been reviewed would be
  * the exact false signal this system exists to avoid.
  *
- * `ai-ready` is absent: it is a human input, never a controller output.
+ * `WAITING_READY` is the short durable boundary after curation. It projects to
+ * `ai-ready`, which the scheduler consumes automatically on the same or next
+ * tick.
  */
 export const LINEAR_PROJECTION: Readonly<Record<WorkflowState, AiLifecycleLabel | null>> = {
   DISCOVERED: 'ai-curate',
   CURATING: 'ai-curate',
-  WAITING_READY: 'ai-curated',
+  WAITING_READY: 'ai-ready',
   NEEDS_CONTEXT: 'ai-needs-context',
   QUEUED: 'ai-running',
   PLANNING: 'ai-running',

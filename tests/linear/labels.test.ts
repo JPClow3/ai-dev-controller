@@ -4,7 +4,6 @@ import {
   setAiLifecycleLabel,
   clearAiLifecycleLabels,
   assertLabelWritable,
-  ForbiddenLabelWrite,
   CONTROLLER_WRITABLE_LABELS,
   assertLifecycleLabelsExist,
 } from '../../src/linear/labels.js';
@@ -43,24 +42,25 @@ function fakeLinear(issueLabels: string[]) {
 beforeEach(() => setLinearClient(null));
 afterEach(() => setLinearClient(null));
 
-describe('ai-ready is a human input', () => {
-  it('is excluded from the controller-writable set', () => {
-    expect(CONTROLLER_WRITABLE_LABELS).not.toContain('ai-ready');
-    expect(CONTROLLER_WRITABLE_LABELS).toContain('ai-running');
+describe('controller-owned autonomous lifecycle', () => {
+  it('includes ai-ready in the controller-writable set', () => {
+    expect(CONTROLLER_WRITABLE_LABELS).toContain('ai-ready');
+    expect(CONTROLLER_WRITABLE_LABELS).toEqual(AI_LIFECYCLE_LABELS);
   });
 
-  it('refuses to be applied by the controller', () => {
-    expect(() => assertLabelWritable('ai-ready')).toThrow(ForbiddenLabelWrite);
+  it('allows ai-ready to be applied by the controller', () => {
+    expect(() => assertLabelWritable('ai-ready')).not.toThrow();
   });
 
-  it('cannot be written even through the normal call path', async () => {
-    fakeLinear(['ai-curate']);
-    await expect(setAiLifecycleLabel('UNI-1', 'ai-ready')).rejects.toThrow(ForbiddenLabelWrite);
+  it('promotes ai-curate to ai-ready through the normal call path', async () => {
+    const { updateIssue, nameOf } = fakeLinear(['ai-curate']);
+    await setAiLifecycleLabel('UNI-1', 'ai-ready');
+    const names = (updateIssue.mock.calls[0] as unknown as [string, { labelIds: string[] }])[1].labelIds.map(nameOf);
+    expect(names).toEqual(['ai-ready']);
   });
 
-  it('allows every other lifecycle label', () => {
+  it('allows every lifecycle label', () => {
     for (const label of AI_LIFECYCLE_LABELS) {
-      if (label === 'ai-ready') continue;
       expect(() => assertLabelWritable(label)).not.toThrow();
     }
   });
@@ -86,10 +86,7 @@ describe('lifecycle label write preserves everything it does not own', () => {
     expect(names).not.toContain('ai-curate');
   });
 
-  it('does not strip a human ai-ready when moving to ai-running', async () => {
-    // The human applied ai-ready; the controller then marks it running. Both
-    // are lifecycle labels, so ai-ready is legitimately replaced - but the
-    // user's other labels must survive.
+  it('replaces ai-ready with ai-running while preserving user labels', async () => {
     const { updateIssue, nameOf } = fakeLinear(['ai-ready', 'Feature']);
     await setAiLifecycleLabel('UNI-1', 'ai-running');
 

@@ -16,6 +16,51 @@ export interface LinearIssueContract extends LinearIssueSummary {
   blockedBy: string[];
 }
 
+export interface NewlyCreatedLinearIssue extends LinearIssueSummary {
+  description: string;
+  createdAt: string;
+}
+
+/**
+ * Lists every live issue created inside a closed time window.
+ *
+ * The upper bound makes the persisted cursor safe: an issue created while a
+ * page is being fetched belongs to the next poll instead of falling between
+ * two moving windows. Pagination is fully drained before the cursor advances.
+ */
+export async function listIssuesCreatedBetween(
+  afterExclusive: string,
+  throughInclusive: string,
+): Promise<NewlyCreatedLinearIssue[]> {
+  const client = getLinearClient();
+  const result = await client.issues({
+    filter: { createdAt: { gt: afterExclusive, lte: throughInclusive } },
+    first: 100,
+  });
+
+  while (result.pageInfo.hasNextPage) await result.fetchNext();
+
+  const summaries: NewlyCreatedLinearIssue[] = [];
+  for (const issue of result.nodes) {
+    if (issue.archivedAt || issue.canceledAt || issue.completedAt) continue;
+    const [labels, project] = await Promise.all([issue.labels(), issue.project]);
+    summaries.push({
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      description: issue.description ?? '',
+      labels: labels.nodes.map((label) => label.name),
+      projectName: project?.name ?? null,
+      url: issue.url,
+      createdAt:
+        issue.createdAt instanceof Date ? issue.createdAt.toISOString() : String(issue.createdAt ?? ''),
+      updatedAt:
+        issue.updatedAt instanceof Date ? issue.updatedAt.toISOString() : String(issue.updatedAt ?? ''),
+    });
+  }
+  return summaries;
+}
+
 /**
  * Returns only issues actually carrying `label`.
  *

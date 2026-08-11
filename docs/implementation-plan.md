@@ -96,7 +96,7 @@ These are the ones worth keeping green as the rest lands:
 - Issues inside a dependency cycle are never scheduled.
 - A model recommendation cannot substitute for a mechanical fact: entering
   `FINAL_REVIEW` requires `requiredCiPassed`, `MERGED` requires `mergedByHuman`.
-- `ai-ready` is never in the controller's writable label set.
+- A complete curated contract is promoted automatically to `ai-ready`.
 - Scoring weights must sum to 1.0 or the controller refuses to start.
 
 ---
@@ -121,9 +121,8 @@ What remains is the selection logic.
 - [ ] Reviewer selection by authorship share, preferring a family outside the
       dominant one
 
-Tests to write: high GPT pressure shifts a low-risk routine task to an Ollama
-challenger **without** changing the stored champion; high-risk never selects a
-challenger; cross-family review excludes the dominant author family.
+Tests pin the OpenAI pilot policy: challengers use the same model at a different
+reasoning effort; high-risk never experiments; final review uses the Sol tier.
 
 ## Task 7 — Orca adapter
 
@@ -186,8 +185,9 @@ Unchanged, and worth restating because it is the real definition of done:
 
 ```
 rough Linear issue
+-> controller applies ai-curate
 -> curator improves it
--> human adds ai-ready
+-> controller applies ai-ready
 -> controller claims it exactly once
 -> explicit blockers respected
 -> fresh parent Orca worktree from origin/main
@@ -197,7 +197,7 @@ rough Linear issue
 -> commits integrate into one parent branch
 -> repository-defined local validation passes
 -> GitHub Actions required checks pass
--> cross-family final review, zero blocking findings
+-> Sol final review, zero blocking findings
 -> one draft PR
 -> human remains the only merge authority
 -> controller restart at any stage resumes without duplication

@@ -134,10 +134,14 @@ function parseUsage(stdout: string): { usage?: { outputTokens?: number } } {
 /** Profiles this controller expects as ~/.codex/<name>.config.toml files. */
 export const EXPECTED_CODEX_PROFILES = [
   'gpt-luna-low',
+  'gpt-luna-medium',
   'gpt-luna-high',
   'gpt-luna-xhigh',
+  'gpt-terra-medium',
   'gpt-terra-high',
   'gpt-terra-xhigh',
+  'gpt-sol-medium',
+  'gpt-sol-high',
   'gpt-sol-xhigh',
   'ollama-glm',
   'ollama-kimi',

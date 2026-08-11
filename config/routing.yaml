@@ -2,9 +2,10 @@
 # a separate competitor in routing statistics: luna_high and luna_xhigh are
 # not the same worker.
 #
-# `profile` is the Codex profile name in ~/.codex/config.toml. Ollama Cloud
-# runs behind the same Codex harness so all families are compared through one
-# interface rather than across two different agent harnesses.
+# `profile` is the Codex profile name in ~/.codex/<profile>.config.toml.
+# Production roles use OpenAI models. Challengers keep the same model and vary
+# only reasoning effort, so the experiment measures thinking depth rather than
+# changing two variables at once.
 aliases:
   deepseek_flash:
     family: deepseek
@@ -32,31 +33,71 @@ aliases:
     harness: codex
     provider: chatgpt
     profile: gpt-luna-low
+    model: gpt-5.6-luna
+    reasoning_effort: low
+  luna_medium:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-luna-medium
+    model: gpt-5.6-luna
+    reasoning_effort: medium
   luna_high:
     family: openai
     harness: codex
     provider: chatgpt
     profile: gpt-luna-high
+    model: gpt-5.6-luna
+    reasoning_effort: high
   luna_xhigh:
     family: openai
     harness: codex
     provider: chatgpt
     profile: gpt-luna-xhigh
+    model: gpt-5.6-luna
+    reasoning_effort: xhigh
+  terra_medium:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-terra-medium
+    model: gpt-5.6-terra
+    reasoning_effort: medium
   terra_high:
     family: openai
     harness: codex
     provider: chatgpt
     profile: gpt-terra-high
+    model: gpt-5.6-terra
+    reasoning_effort: high
   terra_xhigh:
     family: openai
     harness: codex
     provider: chatgpt
     profile: gpt-terra-xhigh
+    model: gpt-5.6-terra
+    reasoning_effort: xhigh
+  sol_medium:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-sol-medium
+    model: gpt-5.6-sol
+    reasoning_effort: medium
+  sol_high:
+    family: openai
+    harness: codex
+    provider: chatgpt
+    profile: gpt-sol-high
+    model: gpt-5.6-sol
+    reasoning_effort: high
   sol_xhigh:
     family: openai
     harness: codex
     provider: chatgpt
     profile: gpt-sol-xhigh
+    model: gpt-5.6-sol
+    reasoning_effort: xhigh
 
   # Local smoke-test worker. Not referenced by any role, so it never gets
   # routed real work - it exists so the invocation path (HTTP transport, JSON
@@ -87,32 +128,32 @@ aliases:
 # rewrite the per-repository champion as evidence accumulates.
 roles:
   issue_cleanup:
-    champion: deepseek_flash
-    challengers: [luna_low]
+    champion: luna_medium
+    challengers: [luna_low, luna_high]
   requirement_cleanup:
-    champion: luna_low
-    challengers: [glm_5_2]
+    champion: luna_medium
+    challengers: [luna_low, luna_high]
   routine_mechanical:
-    champion: deepseek_flash
-    challengers: [luna_high]
+    champion: luna_high
+    challengers: [luna_medium, luna_xhigh]
   routine_behavior:
     champion: luna_high
-    challengers: [deepseek_flash, kimi_code]
+    challengers: [luna_medium, luna_xhigh]
   routine_bugfix:
     champion: luna_high
-    challengers: [kimi_code]
+    challengers: [luna_medium, luna_xhigh]
   unit_tests:
-    champion: deepseek_flash
-    challengers: [luna_high, kimi_code]
+    champion: luna_high
+    challengers: [luna_medium, luna_xhigh]
   multi_file_feature:
-    champion: kimi_code
-    challengers: [luna_high]
-  large_context:
-    champion: glm_5_2
-    challengers: [terra_high]
-  orchestrator:
     champion: terra_high
-    challengers: [glm_5_2]
+    challengers: [terra_medium, terra_xhigh]
+  large_context:
+    champion: terra_high
+    challengers: [terra_medium, terra_xhigh]
+  orchestrator:
+    champion: sol_high
+    challengers: [sol_medium, sol_xhigh]
   high_risk:
     champion: sol_xhigh
     challengers: []
@@ -127,7 +168,7 @@ risk_gates:
     allow_challenger: false
     locked_role: high_risk
 
-# Reviewer selection is by authorship, not a rigid rule.
+# Final review uses the Sol tier, kept separate from Luna/Terra implementation.
 review:
   integration:
     strategy: opposite_family_from_authors

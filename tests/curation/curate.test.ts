@@ -45,7 +45,7 @@ describe('rough Linear issue curation', () => {
     ).toContain('- [ ] AC-1: Return Enough Ink for zero.');
   });
 
-  it('writes the curated contract and stops at the human approval boundary', async () => {
+  it('writes the curated contract and promotes it directly to ai-ready', async () => {
     const persistCurated = vi.fn(async () => undefined);
     const setLifecycle = vi.fn(async () => undefined);
     const report = await curateIssues({
@@ -59,8 +59,8 @@ describe('rough Linear issue curation', () => {
 
     expect(report.curated).toEqual(['JP-10']);
     expect(persistCurated).toHaveBeenCalledWith(rough('JP-10'), curated('JP-10'));
-    expect(setLifecycle).toHaveBeenCalledWith('JP-10', 'ai-curated');
-    expect(setLifecycle).not.toHaveBeenCalledWith('JP-10', 'ai-ready');
+    expect(setLifecycle).toHaveBeenCalledWith('JP-10', 'ai-ready');
+    expect(setLifecycle).not.toHaveBeenCalledWith('JP-10', 'ai-curated');
   });
 
   it('asks specific questions instead of inventing missing product behavior', async () => {

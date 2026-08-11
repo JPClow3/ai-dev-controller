@@ -16,10 +16,9 @@ export interface SelectorDeps {
 /**
  * We route task types, not whole issues.
  *
- * One issue routinely uses four models: cleanup on DeepSeek, planning on Terra,
- * a mechanical change on DeepSeek, complex frontend work on Kimi. That is the
- * point — the system must never collapse into "the GPT pipeline" or "the
- * Ollama pipeline".
+ * One issue can use multiple tiers: Luna for curation and routine workers,
+ * Terra for complex implementation, and Sol for orchestration/review. Within
+ * each role challengers vary reasoning effort on the same model.
  */
 export function selectModel(input: RoutingInput, deps: SelectorDeps): RoutingDecision {
   const { routing } = deps;
@@ -140,9 +139,8 @@ export function utilityOf(alias: string, input: RoutingInput, deps: SelectorDeps
 
 /**
  * Independent reviewer selection, by authorship rather than a rigid rule.
- *
- * The reviewer comes from the family least involved in writing the code, so a
- * family does not grade its own homework.
+ * Candidate construction keeps final review on Sol; this ranking still
+ * supports multi-family/manual candidate sets and deterministic fallbacks.
  */
 export function selectReviewer(
   authorship: AuthorshipSummary,

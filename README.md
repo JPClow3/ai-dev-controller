@@ -7,11 +7,11 @@ The controller owns workflow state, dependency waves, concurrency, routing polic
 ## How it works
 
 ```
-rough issue
-   |
-ai-curate  ->  curator  ->  insufficient context -> ai-needs-context
-   |
-   +-- enough context -> YOU REVIEW -> add ai-ready
+new Linear issue -> controller adds ai-curate
+                              |
+                           curator  -- insufficient context --> ai-needs-context
+                              |
+                      automatic ai-ready
                               |
                           ai-running
                               |
@@ -22,7 +22,7 @@ ai-curate  ->  curator  ->  insufficient context -> ai-needs-context
                           draft PR -> ai-pr-open -> YOU MERGE
 ```
 
-After `ai-ready`, the system owns the issue until it opens a PR or hits a hard blocker. There are no routine approval checkpoints.
+From issue creation through draft PR, the system owns the flow unless it hits a genuine context, dependency, or safety blocker. There are no routine approval checkpoints.
 
 ### Dependency waves
 
@@ -47,7 +47,6 @@ Every issue branches from a freshly fetched base at the moment it becomes eligib
 
 | Morning | Write / edit issues in Linear |
 | --- | --- |
-| When convenient | Review curated issues → add `ai-ready` |
 | During the day | Occasionally check Orca |
 | Later | GitHub has draft PRs waiting → review → merge |
 
@@ -55,7 +54,7 @@ Every issue branches from a freshly fetched base at the moment it becomes eligib
 
 | Surface | Purpose |
 | --- | --- |
-| **Linear** | Say what needs doing. Add `ai-ready` to approve. |
+| **Linear** | Create the issue and provide repository/product context. |
 | **Orca** | Watch agents, intervene on genuine blockers. |
 | **GitHub** | Review and merge draft PRs. |
 
@@ -76,6 +75,7 @@ copy .env.example .env
 # fill in values — see below
 pnpm cli migrate
 pnpm cli config
+pnpm supervisor:install # Windows: survive Codex/terminal/app exits and logon restarts
 ```
 
 ### Environment variables
@@ -90,36 +90,9 @@ pnpm cli config
 | `AI_DEV_DB` | No | SQLite database path. Default: `./data/controller.db`. |
 | `AI_DEV_LOG_LEVEL` | No | Log verbosity (`info`, `debug`, etc.). Default: `info`. |
 
-<<<<<<< Updated upstream
-The v1 controller is implemented through the draft-PR boundary. The first real
-pilot (Linear JP-8 against Lorebound) completed the full automated path and was
-merged by a human. JP-10 then proved the rough-issue curator, human `ai-ready`
-gate, implementation, validation, CI, final review and draft-PR handoff in one
-live run ([PR #14](https://github.com/JPClow3/Lorebound/pull/14)). JP-9 proved
-dependency unblocking, remediation and crash recovery and has a green draft PR
-([PR #15](https://github.com/JPClow3/Lorebound/pull/15)); its last Codex review
-is durably paused until the provider's reported quota reset.
-
-572 tests pass, with clean typecheck and production build.
-
-```
-src/config/      config contract, Zod schemas, snake_case -> camelCase
-src/state/       SQLite persistence, run claims, audit trail
-src/workflow/    state machine, transition guards, Linear projection
-src/curation/    rough-issue cleanup and human-ready boundary
-src/linear/      issue polling, labels, explicit dependency reads
-src/projects/    repository resolution
-src/knowledge/   documentation discovery and knowledge map
-src/scheduler/   dependency waves, capacity, priority
-src/routing/     Codex model/profile selection
-src/orca/        parent and child worktree orchestration
-src/github/      draft PRs, CI normalization, bounded CI reruns
-src/reviews/     independent review and acceptance-criteria gates
-src/cli/         ai-dev commands
-```
-
-=======
 ## Scripts
+
+586 tests pass, with clean typecheck and production build.
 
 ```powershell
 pnpm build          # compile TypeScript to dist/
@@ -145,8 +118,8 @@ src/
   orca/         worktree creation, Orca client
   projects/     repository resolution
   recovery/     run recovery after restart
-  reviews/      cross-family final review
-  routing/      model routing aliases, escalation policy
+  reviews/      independent Sol final review
+  routing/      OpenAI model/thinking-level routing and escalation
   scheduler/    dependency waves, capacity, priority (DAG)
   scoring/      composite scoring, champion-challenger, promotion
   state/        SQLite persistence, run claims, audit trail
@@ -174,7 +147,8 @@ prompts/
 | Internal state | Linear label |
 | --- | --- |
 | `DISCOVERED`, `CURATING` | `ai-curate` |
-| `NEEDS_CONTEXT`, `WAITING_READY` | `ai-needs-context` |
+| `NEEDS_CONTEXT` | `ai-needs-context` |
+| `WAITING_READY` | `ai-ready` |
 | `QUEUED`, `PLANNING`, `IMPLEMENTING`, `INTEGRATING`, `LOCAL_VALIDATION`, `REMEDIATING` | `ai-running` |
 | `CI`, `FINAL_REVIEW`, `PR_READY` | `ai-reviewing` |
 | `DEPENDENCY_BLOCKED`, `BLOCKED_HUMAN`, `FAILED` | `ai-blocked` |
@@ -182,45 +156,41 @@ prompts/
 
 Internal states like `worker_retry_2`, `glm_review`, and `ci_pending` never surface in Linear. Linear stays readable by design.
 
->>>>>>> Stashed changes
 ## Hard boundaries
 
 Enforced by the controller; no model can override them.
 
 - A dependency is satisfied **only when its PR is merged** into the base branch.
 - Every issue starts from a freshly fetched base branch.
-<<<<<<< Updated upstream
 - Models return *recommended* transitions. The controller verifies mechanical
   preconditions independently and performs the write.
-- Only a human applies `ai-ready`. It is not in the controller's writable
-  label set.
+- The controller owns `ai-curate` through `ai-pr-open`; a complete curator
+  contract is promoted directly to `ai-ready`.
 - Never merge, never push to the base branch, never force-push protected
   branches, never run destructive operations against production.
 - Retry budgets are finite. Exhaustion means `BLOCKED_HUMAN`, not another
   attempt.
 - Startup verifies that every lifecycle label exists in Linear before polling
   or persisting curation state.
-=======
-- Models return *recommended* transitions. The controller verifies mechanical preconditions independently and performs the write.
-- Only a human applies `ai-ready`. It is not in the controller's writable label set.
-- Never merge, never push to the base branch, never force-push protected branches, never run destructive operations against production.
-- Retry budgets are finite. Exhaustion means `BLOCKED_HUMAN`, not another attempt.
->>>>>>> Stashed changes
 
 ## Implementation status
 
-<<<<<<< Updated upstream
 - `better-sqlite3` is pinned to `^13`, not the plan's `^11`: v11 has no Node 26
   prebuild and its source build hangs here.
 - `pnpm-workspace.yaml` and `.npmrc` exist to stop pnpm's install-script gate
   from failing `pnpm test`. Neither blocked package needs its script.
 - Codex workers run headlessly with `sandbox_mode = "workspace-write"` and the
   Windows sandbox forced to `unelevated`, avoiding unattended UAC prompts.
-=======
-Tasks 1–5 implemented. 105 tests, typecheck clean.
->>>>>>> Stashed changes
-
-Tasks 6–14 (routing logic, Orca adapter, CI, review, scoring, recovery, runner, pilot) are specified in [`docs/implementation-plan.md`](docs/implementation-plan.md).
+- On Windows, `pnpm supervisor:install` registers a current-user Scheduled Task
+  at `RunLevel Limited`. It is independent of the ChatGPT desktop process,
+  starts at logon, refuses duplicate supervisors and relaunches the controller
+  after an unexpected exit. It also checks the Orca runtime every 30 seconds
+  and runs `orca open --json` when the desktop runtime disappears. Inspect it
+  with `pnpm supervisor:status`; remove it with `pnpm supervisor:uninstall`.
+- Production routing defaults to OpenAI: Luna medium curates, Luna high handles
+  routine work, Terra high handles complex/large-context work, and Sol high
+  orchestrates and reviews. Challengers vary only reasoning effort on the same
+  underlying model.
 
 ## Platform notes
 

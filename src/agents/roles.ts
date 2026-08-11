@@ -118,15 +118,15 @@ export function createAgents(invoker: Invoker, routing: RoutingConfig) {
 export type Agents = ReturnType<typeof createAgents>;
 
 /**
- * Aliases eligible to review, i.e. every alias a role could route to.
- *
- * Reviewer choice is deliberately drawn from the full routable set rather than
- * a fixed list, so retiring a model from `routing.yaml` also removes it as a
- * reviewer.
+ * Final reviewers come from the orchestrator and high-risk Sol tiers. Normal
+ * implementation uses Luna/Terra, keeping the final judgement independent
+ * while still allowing reasoning-effort fallbacks inside the Sol model.
  */
 export function reviewerCandidates(routing: RoutingConfig): string[] {
   const routable = new Set<string>();
-  for (const role of Object.values(routing.roles)) {
+  for (const name of ['orchestrator', 'high_risk']) {
+    const role = routing.roles[name];
+    if (!role) continue;
     routable.add(role.champion);
     for (const challenger of role.challengers) routable.add(challenger);
   }

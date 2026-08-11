@@ -33,7 +33,7 @@ describe('selectModel', () => {
       deps({ random: () => 0.01 }),
     );
     expect(d.isChallenger).toBe(true);
-    expect(d.alias).toBe('kimi_code');
+    expect(d.alias).toBe('luna_medium');
   });
 
   it('never experiments on medium risk', () => {
@@ -58,32 +58,29 @@ describe('selectModel', () => {
    * The behaviour the design asks for: pressure moves today's route without
    * touching the stored champion.
    */
-  it('shifts off an exhausted provider without changing the champion', () => {
+  it('fails closed when the OpenAI provider is exhausted without changing the champion', () => {
     const pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
-    const d = selectModel({ projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' }, deps({ pressure }));
-
-    expect(d.alias).toBe('kimi_code');
-    expect(d.reason).toBe('pressure_shift');
-    expect(d.rejected.some((r) => r.alias === 'luna_high' && /EXHAUSTED/.test(r.why))).toBe(true);
-    // The configured champion is untouched.
+    expect(() =>
+      selectModel({ projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' }, deps({ pressure })),
+    ).toThrow(/No eligible model/);
     expect(routing.roles['routine_bugfix']!.champion).toBe('luna_high');
   });
 
   it('does not count a forced substitution as a challenger experiment', () => {
-    const pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
     const d = selectModel(
-      { projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' },
-      deps({ pressure, random: () => 0.01 }),
+      { projectId: 'lorebound', role: 'routine_bugfix', risk: 'low', excludeAliases: ['luna_high'] },
+      deps({ random: () => 0.01 }),
     );
     expect(d.isChallenger).toBe(false);
+    expect(d.alias).toBe('luna_medium');
   });
 
-  it('rejects a model whose context window is too small', () => {
+  it('uses Terra as the large-context worker', () => {
     const d = selectModel(
       { projectId: 'lorebound', role: 'large_context', risk: 'low', contextEstimate: 900_000 },
       deps(),
     );
-    expect(d.alias).toBe('glm_5_2');
+    expect(d.alias).toBe('terra_high');
   });
 
   it('will not re-select an alias already tried on this task', () => {
@@ -104,12 +101,12 @@ describe('selectModel', () => {
 
   it('prefers a better-scoring challenger once evidence exists', () => {
     const stats = (_p: string, _r: string, alias: string): AliasStats | null =>
-      alias === 'kimi_code'
+      alias === 'luna_xhigh'
         ? { samples: 20, compositeAvg: 0.9, successRate: 0.9, medianMinutes: 10 }
         : { samples: 20, compositeAvg: 0.4, successRate: 0.5, medianMinutes: 10 };
 
     const d = selectModel({ projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' }, deps({ stats }));
-    expect(d.alias).toBe('kimi_code');
+    expect(d.alias).toBe('luna_xhigh');
   });
 });
 
@@ -174,7 +171,7 @@ describe('nextEscalation', () => {
     projectId: 'lorebound',
     role: 'routine_bugfix',
     risk: 'low' as const,
-    previousAliases: ['deepseek_flash'],
+    previousAliases: ['luna_high'],
     budget: { sameModelRepairs: 0, workerEscalations: 0, reviewRemediationCycles: 0, solAdjudications: 0 },
   };
 
@@ -183,7 +180,7 @@ describe('nextEscalation', () => {
   it('gives a mechanical failure one repair with the same model', () => {
     const d = nextEscalation({ ...base, failureClass: 'mechanical' }, escDeps);
     expect(isHumanBlock(d)).toBe(false);
-    if (!isHumanBlock(d)) expect(d.alias).toBe('deepseek_flash');
+    if (!isHumanBlock(d)) expect(d.alias).toBe('luna_high');
   });
 
   it('does not offer the same model a second repair', () => {
@@ -191,7 +188,7 @@ describe('nextEscalation', () => {
       { ...base, failureClass: 'mechanical', budget: { ...base.budget, sameModelRepairs: 1 } },
       escDeps,
     );
-    if (!isHumanBlock(d)) expect(d.alias).not.toBe('deepseek_flash');
+    if (!isHumanBlock(d)) expect(d.alias).not.toBe('luna_high');
   });
 
   it('never lets a mechanical failure reach Sol', () => {
@@ -202,22 +199,22 @@ describe('nextEscalation', () => {
     if (!isHumanBlock(d)) expect(d.alias).not.toBe('sol_xhigh');
   });
 
-  it('switches family on a localized logic failure', () => {
+  it('switches alias or thinking level on a localized logic failure', () => {
     const d = nextEscalation({ ...base, failureClass: 'localized_logic' }, escDeps);
     expect(isHumanBlock(d)).toBe(false);
     if (!isHumanBlock(d)) {
-      expect(routing.aliases[d.alias]!.family).not.toBe('deepseek');
+      expect(d.alias).not.toBe('luna_high');
     }
   });
 
   it('answers missing context with more context, not more thinking', () => {
     const d = nextEscalation({ ...base, failureClass: 'context_insufficient' }, escDeps);
-    if (!isHumanBlock(d)) expect(d.alias).toBe('glm_5_2');
+    if (!isHumanBlock(d)) expect(d.alias).toBe('terra_high');
   });
 
   it('sends architecture failures to the orchestrator tier', () => {
     const d = nextEscalation({ ...base, failureClass: 'architecture_integration' }, escDeps);
-    if (!isHumanBlock(d)) expect(['terra_high', 'glm_5_2', 'sol_xhigh']).toContain(d.alias);
+    if (!isHumanBlock(d)) expect(['sol_medium', 'sol_high', 'sol_xhigh']).toContain(d.alias);
   });
 
   it('always blocks on requirement ambiguity, no matter the budget', () => {
@@ -244,6 +241,6 @@ describe('nextEscalation', () => {
       },
       escDeps,
     );
-    if (!isHumanBlock(d)) expect(d.alias).not.toBe('sol_xhigh');
+    expect(isHumanBlock(d)).toBe(true);
   });
 });

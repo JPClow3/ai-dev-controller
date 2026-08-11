@@ -269,11 +269,21 @@ const PROVIDER_PRESSURE_RESET = `
 ALTER TABLE provider_pressure ADD COLUMN reset_at TEXT;
 `;
 
+/** Durable watermarks and other singleton controller coordination values. */
+const CONTROLLER_META = `
+CREATE TABLE IF NOT EXISTS controller_meta (
+  key               TEXT PRIMARY KEY,
+  value             TEXT NOT NULL,
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'init', sql: INIT },
   { version: 2, name: 'issue_url', sql: ISSUE_URL },
   { version: 3, name: 'attempt_commit_range', sql: ATTEMPT_COMMIT_RANGE },
   { version: 4, name: 'provider_pressure_reset', sql: PROVIDER_PRESSURE_RESET },
+  { version: 5, name: 'controller_meta', sql: CONTROLLER_META },
 ];
 
 export function applyMigrations(db: BetterSqlite3.Database): number {

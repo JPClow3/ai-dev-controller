@@ -263,10 +263,14 @@ export function createDispatcher(deps: DispatchDeps) {
 export function defaultAgentNameFor(config: ControllerConfig): (alias: string) => string {
   const names: Record<string, string> = {
     luna_low: 'GPT Luna Low',
+    luna_medium: 'GPT Luna Medium',
     luna_high: 'GPT Luna High',
     luna_xhigh: 'GPT Luna XHigh',
+    terra_medium: 'GPT Terra Medium',
     terra_high: 'GPT Terra High',
     terra_xhigh: 'GPT Terra XHigh',
+    sol_medium: 'GPT Sol Medium',
+    sol_high: 'GPT Sol High',
     sol_xhigh: 'GPT Sol XHigh',
     glm_5_2: 'Ollama GLM 5.2',
     kimi_code: 'Ollama Kimi K2.7',

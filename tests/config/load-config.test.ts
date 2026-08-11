@@ -96,7 +96,7 @@ wall_clock:
   it('rejects a routing role whose champion is not a declared alias', () => {
     const dir = scratchRoot();
     const routing = `aliases:
-  luna_high: { family: openai, harness: codex, provider: chatgpt, profile: gpt-luna-high }
+  luna_high: { family: openai, harness: codex, provider: chatgpt, profile: gpt-luna-high, model: gpt-5.6-luna, reasoning_effort: high }
 roles:
   routine_bugfix: { champion: does_not_exist, challengers: [] }
 risk_gates:
@@ -161,6 +161,59 @@ human_escalation_triggers: [unresolved_requirement]
     );
     for (const name of routable) {
       expect(aliases[name]!.harness, `${name} is routable and must use codex`).toBe('codex');
+    }
+  });
+
+  it('rejects a challenger that changes the underlying model', () => {
+    const dir = scratchRoot();
+    writeFileSync(
+      join(dir, 'config/routing.yaml'),
+      `aliases:
+  luna_high: { family: openai, harness: codex, provider: chatgpt, profile: gpt-luna-high, model: gpt-5.6-luna, reasoning_effort: high }
+  terra_medium: { family: openai, harness: codex, provider: chatgpt, profile: gpt-terra-medium, model: gpt-5.6-terra, reasoning_effort: medium }
+roles:
+  routine_bugfix: { champion: luna_high, challengers: [terra_medium] }
+risk_gates:
+  low: { allow_challenger: true }
+  medium: { allow_challenger: false }
+  high: { allow_challenger: false }
+review:
+  integration: { strategy: opposite_family_from_authors }
+  final: { strategy: least_involved_family }
+  escalation: luna_high
+pressure:
+  states: [LOW, NORMAL, HIGH, EXHAUSTED]
+  default: NORMAL
+  scarcity_multiplier: { LOW: 0.6, NORMAL: 1.0, HIGH: 2.0, EXHAUSTED: 999.0 }
+  utility_weights: { expected_score: 1.0, scarcity_penalty: 0.25, latency_penalty: 0.05 }
+  sources: [manual_override]
+`,
+    );
+    expect(() => loadControllerConfig(dir)).toThrow(/must use the champion model/);
+  });
+
+  it('routes production work only through OpenAI models', () => {
+    const { aliases, roles } = loadControllerConfig(ROOT).routing;
+    const routable = new Set(Object.values(roles).flatMap((role) => [role.champion, ...role.challengers]));
+    for (const name of routable) {
+      expect(aliases[name]!.provider, `${name} must use the ChatGPT-backed Codex transport`).toBe('chatgpt');
+      expect(aliases[name]!.family).toBe('openai');
+      expect(aliases[name]!.model).toMatch(/^gpt-5\.6-(luna|terra|sol)$/);
+      expect(aliases[name]!.reasoningEffort).toMatch(/^(low|medium|high|xhigh)$/);
+    }
+  });
+
+  it('compares challengers by thinking level on the same underlying model', () => {
+    const { aliases, roles } = loadControllerConfig(ROOT).routing;
+    for (const [name, role] of Object.entries(roles)) {
+      const champion = aliases[role.champion]!;
+      for (const challengerName of role.challengers) {
+        const challenger = aliases[challengerName]!;
+        expect(challenger.model, `${name}/${challengerName} changes the model`).toBe(champion.model);
+        expect(challenger.reasoningEffort, `${name}/${challengerName} must change thinking`).not.toBe(
+          champion.reasoningEffort,
+        );
+      }
     }
   });
 

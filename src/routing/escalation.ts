@@ -45,8 +45,9 @@ export function nextEscalation(
     if (forbidsAll || forbidden.has(alias)) continue;
     if (input.previousAliases.includes(alias) && action !== 'same_model') continue;
 
-    // Sol is expensive and rationed separately from ordinary escalations.
-    if (alias === 'sol_xhigh' && input.budget.solAdjudications >= escalation.limits.solAdjudications) {
+    // Every Sol reasoning tier is rationed separately from worker escalation.
+    const isSol = alias.startsWith('sol_') || routing.aliases[alias]?.model === 'gpt-5.6-sol';
+    if (isSol && input.budget.solAdjudications >= escalation.limits.solAdjudications) {
       continue;
     }
 
@@ -92,8 +93,8 @@ function resolveAction(
       return input.budget.sameModelRepairs < escalation.limits.sameModelRepair ? last : null;
 
     case 'cross_family_routine': {
-      // Switching family is the whole point: the same family tends to repeat
-      // the same mistake.
+      // The action name predates the OpenAI pilot. The preference now switches
+      // model tier or reasoning effort so the same attempt is not repeated.
       const lastFamily = last ? routing.aliases[last]?.family : undefined;
       const preferred = lastFamily ? (escalation.crossFamilyPreference[lastFamily] ?? []) : [];
       const pick = preferred.find(

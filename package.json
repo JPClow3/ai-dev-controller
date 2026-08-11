@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic controller that turns approved Linear issues into dependency-aware Orca worktrees and draft GitHub PRs",
+  "description": "Deterministic controller that turns new Linear issues into dependency-aware Orca worktrees and draft GitHub PRs",
   "engines": {
     "node": ">=24"
   },
@@ -17,7 +17,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "migrate": "tsx src/state/migrations.ts"
+    "migrate": "tsx src/state/migrations.ts",
+    "supervisor:install": "pwsh -NoProfile -File scripts/manage-windows-supervisor.ps1 install",
+    "supervisor:status": "pwsh -NoProfile -File scripts/manage-windows-supervisor.ps1 status",
+    "supervisor:uninstall": "pwsh -NoProfile -File scripts/manage-windows-supervisor.ps1 uninstall"
   },
   "dependencies": {
     "@linear/sdk": "^39.0.0",

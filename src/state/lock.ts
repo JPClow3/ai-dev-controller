@@ -33,7 +33,7 @@ export class ControllerAlreadyRunning extends Error {
 export function acquireControllerLock(databasePath: string): () => void {
   if (databasePath === ':memory:') return () => undefined;
 
-  const lockPath = resolve(dirname(resolve(databasePath)), 'controller.lock');
+  const lockPath = resolve(dirname(resolve(databasePath)), '.controller-runtime.lock');
 
   const claim = (): void => {
     const fd = openSync(lockPath, 'wx');

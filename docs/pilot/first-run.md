@@ -93,6 +93,9 @@ each other in.
 | 64 | Provider quota refusal was reduced to an ordinary error and retried every polling tick | The typed refusal and reset deadline are persisted in SQLite; model routes pause across restarts and automatically become eligible after expiry |
 | 65 | `ai-dev routes` ignored durable transport pressure | Operators saw `chatgpt NORMAL` while the scheduler correctly had it exhausted; the CLI now renders the same effective map |
 | 66 | Old green PR checks could outrank a harvested remediation commit not yet present on the parent | `INTEGRATING` now proves every recorded worker patch is present before recovery considers GitHub checks |
+| 67 | A controller launched with `Start-Process` was still owned by the transient Codex desktop execution context | It ran for about 20 hours, then disappeared without an application error when the host session ended; a limited current-user Scheduled Task now owns a mutex-protected supervisor and relaunches the controller independently |
+| 68 | The controller isolated Orca probe failures but never restored the Orca desktop runtime | It could keep polling yet no longer create worker worktrees; the Windows supervisor now health-checks Orca every 30 seconds and starts it again when unreachable |
+| 69 | The live PID lock was accidentally tracked as `data/controller.lock` | Every healthy start dirtied the repository; runtime exclusion now uses ignored `data/.controller-runtime.lock`, while the supervisor recognizes the legacy name only during migration |
 
 Two of these deserve more than a table row.
 
@@ -256,6 +259,17 @@ an operator state transition.
   `2026-08-15T22:14:00.000Z`. A controlled second tick made no `codex exec`
   call, and the hidden polling process remains available to resume JP-9 at the
   same `FINAL_REVIEW` checkpoint after the deadline.
+- A process launched from the Codex desktop session later vanished after about
+  20 hours while its final log line was still a healthy tick. The installed
+  limited Scheduled Task replaced that ownership boundary. In a controlled
+  crash, controller root PID `24240` and its descendants were killed; supervisor
+  PID `33152` remained alive, relaunched controller PID `26784` after 15 seconds,
+  and the replacement completed a tick at the same JP-9 checkpoint.
+- A second controlled crash killed only Orca PID `33056`. The supervisor kept
+  controller PID `30008` unchanged, detected the missing runtime on its next
+  30-second health check and restored Orca as PID `23152`. Subsequent controller
+  ticks contained no Orca recovery warning, proving both runtime layers recover
+  independently.
 
 The two low-risk implementation runs now exist and both reached green draft
 pull requests. Final acceptance remains open only because JP-9's independent

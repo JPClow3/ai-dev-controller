@@ -105,10 +105,8 @@ describe('Linear projection', () => {
     }
   });
 
-  it('never projects ai-ready, which is a human input', () => {
-    for (const state of WORKFLOW_STATES) {
-      expect(projectToLinear(state)).not.toBe('ai-ready');
-    }
+  it('projects the curated boundary directly to ai-ready', () => {
+    expect(projectToLinear('WAITING_READY')).toBe('ai-ready');
   });
 
   it('hides internal churn behind ai-running', () => {

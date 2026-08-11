@@ -3,11 +3,11 @@
 ## What you touch
 
 ```
-rough issue
-   |
-ai-curate  ->  curator  ->  insufficient context -> ai-needs-context
-   |
-   +-- enough context -> ai-curated -> YOU REVIEW -> add ai-ready
+new Linear issue -> automatic ai-curate
+                              |
+                           curator  -- insufficient context --> ai-needs-context
+                              |
+                       automatic ai-ready
                               |
                           ai-running
                               |
@@ -18,8 +18,8 @@ ai-curate  ->  curator  ->  insufficient context -> ai-needs-context
                           draft PR -> ai-pr-open -> YOU MERGE
 ```
 
-After `ai-ready`, the system owns the issue until it opens a PR or hits a hard
-blocker. There are no routine approval checkpoints.
+From issue creation through draft PR, the system owns the flow unless it hits a
+genuine blocker. There are no routine approval checkpoints.
 
 ## Interruptions you will NOT get
 
@@ -62,7 +62,7 @@ live in the controller, never in the issue tracker.
 | --- | --- |
 | DISCOVERED, CURATING | `ai-curate` |
 | NEEDS_CONTEXT | `ai-needs-context` |
-| WAITING_READY | `ai-curated` |
+| WAITING_READY | `ai-ready` |
 | QUEUED, PLANNING, IMPLEMENTING, INTEGRATING, LOCAL_VALIDATION, REMEDIATING | `ai-running` |
 | CI, FINAL_REVIEW, PR_READY | `ai-reviewing` |
 | DEPENDENCY_BLOCKED, BLOCKED_HUMAN, FAILED | `ai-blocked` |
@@ -105,7 +105,6 @@ eligible, so wave 2 never implements against yesterday's `main`.
 
 ```
 Morning:            write / edit issues
-When convenient:    review curated issues -> add ai-ready
 During the day:     occasionally check Orca
 Later:              GitHub has draft PRs waiting
 You:                review -> merge

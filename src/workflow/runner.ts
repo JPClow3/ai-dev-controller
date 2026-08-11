@@ -12,6 +12,7 @@ export interface TickReport {
   startedAt: string;
   durationMs: number;
   reconciled: number;
+  adopted: number;
   curated: number;
   readyIssues: string[];
   blockedIssues: Array<{ identifier: string; waitingOn: string[] }>;
@@ -31,6 +32,8 @@ export interface RunnerDeps {
   repos: ControllerRepositories;
 
   reconcile: () => Promise<number>;
+  /** Newly-created unlabeled issues adopted into `ai-curate`. */
+  adoptNewIssues: () => Promise<number>;
   /** Rough `ai-curate` issues processed before implementation scheduling. */
   curateIssues: () => Promise<number>;
   /** Issues carrying `ai-ready`, plus their explicit blockers. */
@@ -63,12 +66,13 @@ export interface RunnerDeps {
  * Order matters and is not arbitrary:
  *   1. reconcile   — the DB is memory, not truth; re-derive reality first
  *   2. merges      — a merge is the only thing that unblocks downstream work
- *   3. curation    — improve rough issues, stopping before the human gate
- *   4. ai-ready    — the human gate, read but never written
- *   5. waves       — recomputed from real merge state every tick
- *   6. capacity    — hard limits
- *   7. priority    — finish things before starting things
- *   8. dispatch
+ *   3. adoption    — new unlabeled issues enter ai-curate
+ *   4. curation    — improve rough issues and promote them to ai-ready
+ *   5. ai-ready    — autonomous implementation queue
+ *   6. waves       — recomputed from real merge state every tick
+ *   7. capacity    — hard limits
+ *   8. priority    — finish things before starting things
+ *   9. dispatch
  */
 export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
   const started = Date.now();
@@ -80,6 +84,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
   const merged = await deps.syncMergedPullRequests();
   for (const issueId of merged) deps.repos.markDependencySatisfiedByMerge(issueId);
 
+  const adopted = await deps.adoptNewIssues();
   const curated = await deps.curateIssues();
 
   const ready = await deps.fetchReadyIssues();
@@ -211,6 +216,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
     startedAt,
     durationMs: Date.now() - started,
     reconciled,
+    adopted,
     curated,
     readyIssues: wave.issues,
     blockedIssues: wave.blocked,
@@ -258,7 +264,8 @@ export async function runLoop(deps: RunnerDeps, options: LoopOptions = {}): Prom
       const report = await runSchedulerTick(deps);
       reports.push(report);
       log.info(
-        `tick: ${report.curated} curated, ${report.dispatched.length} dispatched, ${report.readyIssues.length} ready, ` +
+        `tick: ${report.adopted} adopted, ${report.curated} curated, ${report.dispatched.length} dispatched, ` +
+          `${report.readyIssues.length} ready, ` +
           `${report.blockedIssues.length} blocked${report.throttled ? ', THROTTLED' : ''}`,
       );
     } catch (err) {

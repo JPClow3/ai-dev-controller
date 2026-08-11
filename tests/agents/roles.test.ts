@@ -99,7 +99,7 @@ describe('agent calls', () => {
 });
 
 describe('final review independence', () => {
-  it('picks a reviewer outside the dominant author family', async () => {
+  it('picks a Sol reviewer outside the Luna/Terra implementation tier', async () => {
     const { invoker } = fakeInvoker();
     const agents = createAgents(invoker, config.routing);
 
@@ -108,15 +108,16 @@ describe('final review independence', () => {
       reviewerCandidates(config.routing),
       'packet',
     );
-    expect(config.routing.aliases[alias]!.family).not.toBe('openai');
+    expect(config.routing.aliases[alias]!.model).toBe('gpt-5.6-sol');
   });
 
-  it('draws candidates from the routable set, so retiring a model retires it as a reviewer', () => {
+  it('draws final-review candidates only from orchestrator and high-risk tiers', () => {
     const candidates = reviewerCandidates(config.routing);
     expect(candidates.length).toBeGreaterThan(0);
     for (const alias of candidates) expect(config.routing.aliases[alias]).toBeDefined();
     // local_smoke is not referenced by any role, so it must never review.
     expect(candidates).not.toContain('local_smoke');
+    expect(candidates).toEqual(['sol_high', 'sol_medium', 'sol_xhigh']);
   });
 
   it('falls back to another eligible alias when one reviewer profile exhausts quota', async () => {

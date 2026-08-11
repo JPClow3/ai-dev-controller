@@ -21,6 +21,7 @@ const aliasSchema = z
      * hardcoding a lookup table means every new model needs a code change.
      */
     model: z.string().optional(),
+    reasoning_effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
     context_window: z.number().int().positive().optional(),
     usage_class: z.enum(['low', 'medium', 'high']).optional(),
   })
@@ -30,6 +31,7 @@ const aliasSchema = z
     provider: a.provider,
     profile: a.profile,
     model: a.model,
+    reasoningEffort: a.reasoning_effort,
     contextWindow: a.context_window,
     usageClass: a.usage_class,
   }));
@@ -95,6 +97,23 @@ export const routingConfigSchema = z
   // otherwise surface as a routing failure at dispatch time, mid-issue.
   .superRefine((cfg, ctx) => {
     const known = new Set(Object.keys(cfg.aliases));
+    for (const [name, alias] of Object.entries(cfg.aliases)) {
+      if (alias.provider !== 'chatgpt') continue;
+      if (!alias.model) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['aliases', name, 'model'],
+          message: 'ChatGPT aliases must declare their OpenAI model',
+        });
+      }
+      if (!alias.reasoningEffort) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['aliases', name, 'reasoning_effort'],
+          message: 'ChatGPT aliases must declare reasoning_effort',
+        });
+      }
+    }
     for (const [role, spec] of Object.entries(cfg.roles)) {
       if (!known.has(spec.champion)) {
         ctx.addIssue({
@@ -109,6 +128,26 @@ export const routingConfigSchema = z
             code: z.ZodIssueCode.custom,
             path: ['roles', role, 'challengers'],
             message: `unknown alias "${challenger}"`,
+          });
+        }
+        const champion = cfg.aliases[spec.champion];
+        const contender = cfg.aliases[challenger];
+        if (champion?.model && contender?.model && champion.model !== contender.model) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['roles', role, 'challengers'],
+            message: `challenger "${challenger}" must use the champion model "${champion.model}"`,
+          });
+        }
+        if (
+          champion?.reasoningEffort &&
+          contender?.reasoningEffort &&
+          champion.reasoningEffort === contender.reasoningEffort
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['roles', role, 'challengers'],
+            message: `challenger "${challenger}" must use a different reasoning effort`,
           });
         }
       }

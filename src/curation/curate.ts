@@ -57,8 +57,8 @@ export interface CurateIssuesDeps {
   ) => Promise<CuratedIssueResult>;
   persistCurated: (issue: CuratorIssue, result: CuratedIssueResult) => Promise<void>;
   requestContext: (identifier: string, context: NeedsContext) => Promise<void>;
-  /** Automatic labels stop at human review; `ai-ready` is never writable. */
-  setLifecycle: (identifier: string, label: 'ai-curated' | 'ai-needs-context') => Promise<void>;
+  /** A complete contract is promoted directly into the implementation queue. */
+  setLifecycle: (identifier: string, label: 'ai-ready' | 'ai-needs-context') => Promise<void>;
 }
 
 export interface CurationReport {
@@ -87,8 +87,8 @@ export function normalizeCuratedBody(body: string, criteria: CuratedCriterion[])
 }
 
 /**
- * Processes rough Linear issues without ever crossing the human `ai-ready`
- * gate. One provider failure is isolated to that issue so polling continues.
+ * Processes rough Linear issues and promotes a complete contract to
+ * `ai-ready`. One provider failure is isolated so polling continues.
  */
 export async function curateIssues(deps: CurateIssuesDeps): Promise<CurationReport> {
   const report: CurationReport = { curated: [], needsContext: [], failed: [] };
@@ -136,7 +136,7 @@ export async function curateIssues(deps: CurateIssuesDeps): Promise<CurationRepo
       }
 
       await deps.persistCurated(issue, result);
-      await deps.setLifecycle(issue.identifier, 'ai-curated');
+      await deps.setLifecycle(issue.identifier, 'ai-ready');
       report.curated.push(issue.identifier);
     } catch (error) {
       report.failed.push({

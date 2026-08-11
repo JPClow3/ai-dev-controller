@@ -447,7 +447,8 @@ program
       const last = reports[reports.length - 1];
       if (last) {
         console.log(
-          `curated ${last.curated} | ready ${last.readyIssues.length} | dispatched ${last.dispatched.length} | ` +
+          `adopted ${last.adopted} | curated ${last.curated} | ready ${last.readyIssues.length} | ` +
+          `dispatched ${last.dispatched.length} | ` +
             `blocked ${last.blockedIssues.length} | needs-context ${last.needsContext.length}` +
             (last.throttled ? ' | THROTTLED' : ''),
         );

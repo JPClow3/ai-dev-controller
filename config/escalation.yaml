@@ -30,19 +30,23 @@ failure_routes:
 # Aliases a given failure class may never reach, regardless of the ladder.
 forbidden:
   mechanical:
+    - sol_medium
+    - sol_high
     - sol_xhigh
   localized_logic:
+    - sol_medium
+    - sol_high
     - sol_xhigh
   requirement_ambiguity:
     - "*"
 
-# Cross-family preference used by the `cross_family_routine` action, so a
-# repeated mistake is not simply repeated by the same model family.
+# The legacy action name is retained for config compatibility. In the OpenAI
+# pilot it changes model tier or reasoning effort instead of switching vendor.
 cross_family_preference:
-  deepseek: [luna_high, kimi_code]
-  openai: [kimi_code, deepseek_flash]
+  deepseek: [luna_high, terra_high]
+  openai: [luna_xhigh, terra_high, terra_xhigh]
   kimi: [luna_high, terra_high]
-  glm: [luna_high, kimi_code]
+  glm: [luna_high, terra_high]
 
 review_remediation:
   orchestrator_validates_finding: true

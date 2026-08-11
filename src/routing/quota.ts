@@ -33,6 +33,14 @@ export function isProviderQuotaExhausted(error: unknown): error is ProviderQuota
   return error instanceof ProviderQuotaExhaustedError;
 }
 
+/**
+ * A reported quota reset is an upper bound, not a guarantee that capacity
+ * cannot return sooner. Credits, account changes and provider-side corrections
+ * can make the transport usable again before that timestamp. Recheck at a
+ * restrained cadence so a stale refusal cannot freeze the controller for days.
+ */
+export const QUOTA_RECHECK_INTERVAL_MS = 15 * 60_000;
+
 /** Persist and activate a transport refusal before the next scheduler tick. */
 export function applyQuotaCooldown(
   store: ProviderPressureStore,
@@ -41,10 +49,13 @@ export function applyQuotaCooldown(
   now = new Date(),
 ): Date {
   const reported = error.resetAt;
-  // A provider that omits its reset must still avoid a 45-second hot loop.
+  // This timestamp controls the next probe, not the provider's contractual
+  // reset. Cap long reported windows so restored capacity is rediscovered
+  // automatically, while still avoiding the scheduler's 45-second hot loop.
+  const periodicRecheck = new Date(now.getTime() + QUOTA_RECHECK_INTERVAL_MS);
   const resetAt = reported && reported.getTime() > now.getTime()
-    ? reported
-    : new Date(now.getTime() + 15 * 60_000);
+    ? new Date(Math.min(reported.getTime(), periodicRecheck.getTime()))
+    : periodicRecheck;
   const value = {
     pressure: 'EXHAUSTED' as const,
     remainingAllowance: 0,

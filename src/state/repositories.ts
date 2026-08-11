@@ -64,6 +64,23 @@ export function createRepositories(db: ControllerDatabase) {
   const setIssueState = db.raw.prepare('UPDATE issues SET state = ?, updated_at = datetime(\'now\') WHERE id = ?');
 
   return {
+    getControllerMeta(key: string): string | null {
+      const row = db.raw.prepare('SELECT value FROM controller_meta WHERE key = ?').get(key) as
+        | { value: string }
+        | undefined;
+      return row?.value ?? null;
+    },
+
+    setControllerMeta(key: string, value: string): void {
+      db.raw
+        .prepare(
+          `INSERT INTO controller_meta (key, value, updated_at)
+           VALUES (?, ?, datetime('now'))
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+        )
+        .run(key, value);
+    },
+
     /**
      * Claim the single active run for an issue, or return null if one exists.
      *
