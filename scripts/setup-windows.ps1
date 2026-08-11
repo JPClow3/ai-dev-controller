@@ -75,21 +75,42 @@ function Test-NodeVersion {
   }
 }
 
+function Refresh-ProcessPath {
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $allPaths = @($env:Path, $machinePath, $userPath) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object { $_ -split ';' } |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
+  $env:Path = $allPaths -join ';'
+}
+
 function Ensure-WingetPackage {
   param(
     [string]$Name,
     [string]$Command,
     [string]$Id,
-  [switch]$RequireSearch
+    [switch]$RequireSearch,
+    [int]$MinimumNodeMajor = 0
   )
 
   $existing = Find-Command $Command
-  if ($null -ne $existing) {
+  $nodeIsSupported = $true
+  if ($MinimumNodeMajor -gt 0 -and $null -ne $existing) {
+    $nodeIsSupported = (Test-NodeVersion).Available
+  }
+  if ($null -ne $existing -and $nodeIsSupported) {
     Write-CheckResult $Name $true $existing.Source
     return $true
   }
   if (-not $Install) {
-    Write-CheckResult $Name $false "missing; rerun with -Install to install $Id"
+    $detail = if ($null -eq $existing) {
+      "missing; rerun with -Install to install $Id"
+    } else {
+      "Node is below v$MinimumNodeMajor; rerun with -Install to update $Id"
+    }
+    Write-CheckResult $Name $false $detail
     return $false
   }
 
@@ -113,7 +134,17 @@ function Ensure-WingetPackage {
     Write-CheckResult $Name $false "winget install failed for $Id"
     return $false
   }
-  Write-CheckResult $Name $true "installed $Id; open a new terminal if it is not yet on PATH"
+  Refresh-ProcessPath
+  $installed = Find-Command $Command
+  if ($null -eq $installed) {
+    Write-CheckResult $Name $false "winget installed $Id, but it is unavailable in this process; open a new terminal and rerun this command"
+    return $false
+  }
+  if ($MinimumNodeMajor -gt 0 -and -not (Test-NodeVersion).Available) {
+    Write-CheckResult $Name $false "winget completed, but Node is still below v$MinimumNodeMajor; update Node.js LTS, open a new terminal, and rerun this command"
+    return $false
+  }
+  Write-CheckResult $Name $true "installed $Id at $($installed.Source)"
   return $true
 }
 
@@ -207,7 +238,8 @@ $modeText = if ($Install) { 'Mode: install and audit' } else { 'Mode: audit only
 Write-Host $modeText
 
 foreach ($package in $RequiredPackages) {
-  [void](Ensure-WingetPackage -Name $package.Name -Command $package.Command -Id $package.Id)
+  $minimumNodeMajor = if ($package.Command -eq 'node') { 24 } else { 0 }
+  [void](Ensure-WingetPackage -Name $package.Name -Command $package.Command -Id $package.Id -MinimumNodeMajor $minimumNodeMajor)
 }
 $nodeVersion = Test-NodeVersion
 Write-CheckResult 'Node.js version' $nodeVersion.Available $nodeVersion.Detail
@@ -227,7 +259,8 @@ if ($nodeVersion.Available) {
       & $corepack.Source prepare pnpm@latest --activate | Out-Host
       $corepackEnable = $LASTEXITCODE -eq 0
     }
-    Write-CheckResult 'Corepack pnpm' $corepackEnable (if ($corepackEnable) { 'enabled pnpm@latest' } else { 'failed to activate pnpm' })
+    $corepackDetail = if ($corepackEnable) { 'enabled pnpm@latest' } else { 'failed to activate pnpm' }
+    Write-CheckResult 'Corepack pnpm' $corepackEnable $corepackDetail
   } elseif ($null -eq $corepack) {
     Write-CheckResult 'Corepack' $false 'missing; reinstall Node.js LTS'
   }
@@ -250,9 +283,12 @@ if ($Install) {
     Write-LocalRegistry ([IO.Path]::GetFullPath($RepositoryRoot))
   }
 
-  if ($null -ne (Find-Command 'pnpm')) {
+  if ($nodeVersion.Available -and $null -ne (Find-Command 'pnpm')) {
     [void](Invoke-ControllerCheck 'pnpm install' @('install'))
     [void](Invoke-ControllerCheck 'pnpm cli migrate' @('cli', 'migrate'))
+  } else {
+    Write-CheckResult 'pnpm install' $false 'requires Node.js >= v24 and pnpm on PATH; rerun after completing the prerequisite install'
+    Write-CheckResult 'pnpm cli migrate' $false 'requires Node.js >= v24 and pnpm on PATH; rerun after completing the prerequisite install'
   }
 }
 
@@ -274,9 +310,12 @@ if ($null -eq $codex) {
   Write-CheckResult 'Codex login' ($LASTEXITCODE -eq 0) 'run codex login if this check fails'
 }
 
-if ($null -ne (Find-Command 'pnpm')) {
+if ($nodeVersion.Available -and $null -ne (Find-Command 'pnpm')) {
   [void](Invoke-ControllerCheck 'pnpm cli config' @('cli', 'config'))
   [void](Invoke-ControllerCheck 'pnpm cli doctor' @('cli', 'doctor'))
+} elseif ($null -ne (Find-Command 'pnpm')) {
+  Write-CheckResult 'pnpm cli config' $false 'requires Node.js >= v24'
+  Write-CheckResult 'pnpm cli doctor' $false 'requires Node.js >= v24'
 }
 
 if ($InstallSupervisor) {

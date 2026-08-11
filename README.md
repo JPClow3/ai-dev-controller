@@ -92,6 +92,12 @@ Install missing CLI prerequisites and create machine-local controller files:
 .\scripts\setup-windows.ps1 -Install -RepositoryRoot C:\Code
 ```
 
+Install prerequisites and the optional current-user supervisor together:
+
+```powershell
+.\scripts\setup-windows.ps1 -Install -RepositoryRoot C:\Code -InstallSupervisor
+```
+
 Add `-InstallSupervisor` to that install command only when the optional
 current-user Windows supervisor should be registered. `winget` is used only
 with `-Install`; the audit never installs packages, creates a scheduled task,
