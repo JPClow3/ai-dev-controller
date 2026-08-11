@@ -78,6 +78,29 @@ pnpm cli config
 pnpm supervisor:install # Windows: survive Codex/terminal/app exits and logon restarts
 ```
 
+## Windows notebook bootstrap
+
+Audit a notebook without changing it:
+
+```powershell
+.\scripts\setup-windows.ps1
+```
+
+Install missing CLI prerequisites and create machine-local controller files:
+
+```powershell
+.\scripts\setup-windows.ps1 -Install -RepositoryRoot C:\Code
+```
+
+Add `-InstallSupervisor` to that install command only when the optional
+current-user Windows supervisor should be registered. `winget` is used only
+with `-Install`; the audit never installs packages, creates a scheduled task,
+or modifies files. The script never overwrites credentials, `.env`, the shared
+registry, or an existing local registry unless `-Force` is explicitly passed.
+Sign in manually with `gh auth login`, `codex login`, and the Orca desktop
+setup. Device-specific repository paths are written only to the gitignored,
+path-only `projects/registry.local.yaml` overlay.
+
 ### Environment variables
 
 | Variable | Required | Description |
