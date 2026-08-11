@@ -70,6 +70,9 @@ function mergeLocalRegistry(
 
   const mergedProjects = { ...committedProjects };
   for (const [projectId, override] of Object.entries(localProjects)) {
+    if (!Object.prototype.hasOwnProperty.call(committedProjects, projectId)) {
+      throw localRegistryError(`projects.${projectId}: unknown project "${projectId}"`);
+    }
     const committedProject = committedProjects[projectId];
     if (!isRecord(committedProject)) {
       throw localRegistryError(`projects.${projectId}: unknown project "${projectId}"`);

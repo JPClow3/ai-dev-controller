@@ -116,6 +116,16 @@ wall_clock:
     expect(() => loadControllerConfig(dir)).toThrow(/unknown project "missing"/);
   });
 
+  it('rejects a local path override for the prototype project key', () => {
+    const dir = scratchRoot();
+    writeFileSync(
+      join(dir, 'projects/registry.local.yaml'),
+      `projects:\n  __proto__:\n    repository:\n      path: C:/Code/prototype\n`,
+    );
+
+    expect(() => loadControllerConfig(dir)).toThrow(/unknown project "__proto__"/);
+  });
+
   it('rejects local registry group overrides', () => {
     const dir = scratchRoot();
     writeFileSync(
