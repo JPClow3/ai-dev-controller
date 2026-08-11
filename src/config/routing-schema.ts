@@ -49,15 +49,17 @@ export const routingConfigSchema = z
   .object({
     aliases: z.record(z.string(), aliasSchema),
     roles: z.record(z.string(), roleSchema),
-    risk_gates: z.record(
-      z.enum(['low', 'medium', 'high']),
-      z
-        .object({
-          allow_challenger: z.boolean(),
-          locked_role: z.string().optional(),
-        })
+    risk_gates: z.object({
+      low: z
+        .object({ allow_challenger: z.boolean(), locked_role: z.string().optional() })
         .transform((g) => ({ allowChallenger: g.allow_challenger, lockedRole: g.locked_role })),
-    ),
+      medium: z
+        .object({ allow_challenger: z.boolean(), locked_role: z.string().optional() })
+        .transform((g) => ({ allowChallenger: g.allow_challenger, lockedRole: g.locked_role })),
+      high: z
+        .object({ allow_challenger: z.boolean(), locked_role: z.string().optional() })
+        .transform((g) => ({ allowChallenger: g.allow_challenger, lockedRole: g.locked_role })),
+    }),
     review: z
       .object({
         integration: z.object({ strategy: z.literal('opposite_family_from_authors') }),
@@ -151,6 +153,22 @@ export const routingConfigSchema = z
           });
         }
       }
+    }
+    for (const [risk, gate] of Object.entries(cfg.risk_gates)) {
+      if (gate.lockedRole && !cfg.roles[gate.lockedRole]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['risk_gates', risk, 'locked_role'],
+          message: `unknown role "${gate.lockedRole}"`,
+        });
+      }
+    }
+    if (cfg.risk_gates.high.allowChallenger) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['risk_gates', 'high', 'allow_challenger'],
+        message: 'high-risk routing cannot allow challengers',
+      });
     }
     if (!known.has(cfg.review.escalation)) {
       ctx.addIssue({

@@ -1,5 +1,6 @@
 import { getLinearClient } from './client.js';
 import { commentOnIssue } from './issues.js';
+import { drainConnection } from './pagination.js';
 
 export interface LinearDependency {
   issueIdentifier: string;
@@ -17,14 +18,17 @@ export interface LinearDependency {
 export async function getExplicitBlockers(identifier: string): Promise<LinearDependency[]> {
   const client = getLinearClient();
   const issue = await client.issue(identifier);
-  const relations = await issue.relations();
+  // A blocking issue owns the forward `blocks` relation. The blocked issue's
+  // prerequisites therefore live on its inverse relation connection.
+  const relations = await issue.inverseRelations({ first: 100 });
+  await drainConnection(relations);
 
   const blockers: LinearDependency[] = [];
   for (const relation of relations.nodes) {
     if (relation.type !== 'blocks') continue;
-    const related = await relation.relatedIssue;
-    if (!related) continue;
-    blockers.push({ issueIdentifier: issue.identifier, blockedByIdentifier: related.identifier });
+    const blocker = await relation.issue;
+    if (!blocker) continue;
+    blockers.push({ issueIdentifier: issue.identifier, blockedByIdentifier: blocker.identifier });
   }
   return blockers;
 }

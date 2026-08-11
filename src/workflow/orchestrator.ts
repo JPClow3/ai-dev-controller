@@ -69,7 +69,7 @@ export interface OrchestratorDeps {
   /** Relaunch interrupted tasks when their persisted attempt budget permits. */
   retryInterruptedWorkers: (ctx: StepContext, taskIds: string[]) => Promise<boolean>;
   /** Launches tasks whose blockers have finished; returns how many started. */
-  dispatchNextWave: (ctx: StepContext) => Promise<number>;
+  dispatchNextWave: (ctx: StepContext) => Promise<{ started: number; capacityBlocked: boolean }>;
   integrate: (ctx: StepContext) => Promise<{ conflicts: string[]; headSha: string | null }>;
 
   runValidation: (ctx: StepContext) => Promise<ValidationSummary>;
@@ -238,9 +238,12 @@ async function stepImplementing(ctx: StepContext, deps: OrchestratorDeps): Promi
   // A wave finishing is not the plan finishing. Tasks held back behind a
   // blocker become runnable exactly here, and integrating without them would
   // ship half a plan while reporting that every task reached a terminal state.
-  const started = await deps.dispatchNextWave(ctx);
-  if (started > 0) {
-    return { from: ctx.run.state, to: null, action: 'waiting', detail: `${started} task(s) dispatched in the next wave` };
+  const nextWave = await deps.dispatchNextWave(ctx);
+  if (nextWave.started > 0 || nextWave.capacityBlocked) {
+    const detail = nextWave.capacityBlocked
+      ? `${nextWave.started} task(s) dispatched; waiting for worker capacity`
+      : `${nextWave.started} task(s) dispatched in the next wave`;
+    return { from: ctx.run.state, to: null, action: 'waiting', detail };
   }
 
   return move(ctx, deps, 'INTEGRATING', {

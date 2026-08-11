@@ -59,6 +59,8 @@ export interface CurateIssuesDeps {
   requestContext: (identifier: string, context: NeedsContext) => Promise<void>;
   /** A complete contract is promoted directly into the implementation queue. */
   setLifecycle: (identifier: string, label: 'ai-ready' | 'ai-needs-context') => Promise<void>;
+  /** Lets the composition root persist provider cooldowns; `stop` ends this batch. */
+  onFailure?: (issue: CuratorIssue, error: unknown) => Promise<'continue' | 'stop' | void> | 'continue' | 'stop' | void;
 }
 
 export interface CurationReport {
@@ -143,6 +145,7 @@ export async function curateIssues(deps: CurateIssuesDeps): Promise<CurationRepo
         identifier: issue.identifier,
         error: error instanceof Error ? error.message : String(error),
       });
+      if ((await deps.onFailure?.(issue, error)) === 'stop') break;
     }
   }
 

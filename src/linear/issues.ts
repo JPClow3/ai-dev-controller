@@ -1,4 +1,5 @@
 import { getLinearClient } from './client.js';
+import { drainConnection } from './pagination.js';
 
 export interface LinearIssueSummary {
   id: string;
@@ -38,12 +39,13 @@ export async function listIssuesCreatedBetween(
     first: 100,
   });
 
-  while (result.pageInfo.hasNextPage) await result.fetchNext();
+  await drainConnection(result);
 
   const summaries: NewlyCreatedLinearIssue[] = [];
   for (const issue of result.nodes) {
     if (issue.archivedAt || issue.canceledAt || issue.completedAt) continue;
-    const [labels, project] = await Promise.all([issue.labels(), issue.project]);
+    const [labels, project] = await Promise.all([issue.labels({ first: 100 }), issue.project]);
+    await drainConnection(labels);
     summaries.push({
       id: issue.id,
       identifier: issue.identifier,
@@ -70,11 +72,13 @@ export async function listIssuesCreatedBetween(
  */
 export async function listIssuesByLabel(label: string): Promise<LinearIssueSummary[]> {
   const client = getLinearClient();
-  const result = await client.issues({ filter: { labels: { name: { eq: label } } } });
+  const result = await client.issues({ filter: { labels: { name: { eq: label } } }, first: 100 });
+  await drainConnection(result);
 
   const summaries: LinearIssueSummary[] = [];
   for (const issue of result.nodes) {
-    const [labels, project] = await Promise.all([issue.labels(), issue.project]);
+    const [labels, project] = await Promise.all([issue.labels({ first: 100 }), issue.project]);
+    await drainConnection(labels);
     const names = labels.nodes.map((l) => l.name);
     if (!names.includes(label)) continue;
     summaries.push({
@@ -95,15 +99,16 @@ export async function getIssueContract(identifier: string): Promise<LinearIssueC
   const client = getLinearClient();
   const issue = await client.issue(identifier);
   const [labels, project, inverseRelations] = await Promise.all([
-    issue.labels(),
+    issue.labels({ first: 100 }),
     issue.project,
     // `inverseRelations`, not `relations`. Linear stores one row per pair: the
     // blocking issue owns a `blocks` relation pointing at the blocked one.
     // Reading `relations` therefore yields the issues THIS one blocks, and
     // recording those as its blockers inverted the entire dependency graph —
     // the scheduler ran dependents first and held their prerequisites.
-    issue.inverseRelations(),
+    issue.inverseRelations({ first: 100 }),
   ]);
+  await Promise.all([drainConnection(labels), drainConnection(inverseRelations)]);
 
   const blockedBy: string[] = [];
   for (const relation of inverseRelations.nodes) {

@@ -155,5 +155,6 @@ describe('final review independence', () => {
       provider: 'chatgpt',
       resetAt,
     });
+    expect(structured).toHaveBeenCalledOnce();
   });
 });

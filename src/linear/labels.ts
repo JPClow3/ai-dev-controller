@@ -1,6 +1,7 @@
 import type { AiLifecycleLabel } from '../workflow/states.js';
 import { AI_LIFECYCLE_LABELS } from '../workflow/states.js';
 import { getLinearClient } from './client.js';
+import { drainConnection } from './pagination.js';
 
 /** The controller owns the complete ai-* lifecycle through draft PR creation. */
 export const CONTROLLER_WRITABLE_LABELS: readonly AiLifecycleLabel[] = AI_LIFECYCLE_LABELS;
@@ -13,7 +14,8 @@ export function assertLabelWritable(label: AiLifecycleLabel): void {
 
 /** Fails startup before curation can persist only half of its Linear write. */
 export async function assertLifecycleLabelsExist(): Promise<void> {
-  const labels = await getLinearClient().issueLabels();
+  const labels = await getLinearClient().issueLabels({ first: 100 });
+  await drainConnection(labels);
   const present = new Set(labels.nodes.map((label) => label.name));
   const missing = AI_LIFECYCLE_LABELS.filter((label) => !present.has(label));
   if (missing.length > 0) {
@@ -22,7 +24,8 @@ export async function assertLifecycleLabelsExist(): Promise<void> {
 }
 
 /**
- * Sets exactly one lifecycle label, removing the others.
+ * Sets exactly one lifecycle label, removing the others with atomic label
+ * mutations instead of replacing the issue's complete label set.
  *
  * Non-lifecycle labels (Bug, Feature, repo:*) are preserved — the controller
  * owns the ai-* namespace and nothing else.
@@ -32,30 +35,43 @@ export async function setAiLifecycleLabel(issueId: string, label: AiLifecycleLab
 
   const client = getLinearClient();
   const issue = await client.issue(issueId);
-  const existing = await issue.labels();
+  const [existing, all] = await Promise.all([
+    issue.labels({ first: 100 }),
+    client.issueLabels({ first: 100 }),
+  ]);
+  await Promise.all([drainConnection(existing), drainConnection(all)]);
 
   const lifecycle = new Set<string>(AI_LIFECYCLE_LABELS);
-  const keep = existing.nodes.filter((l) => !lifecycle.has(l.name)).map((l) => l.id);
-
-  const all = await client.issueLabels();
   const target = all.nodes.find((l) => l.name === label);
   if (!target) throw new Error(`Linear label "${label}" does not exist in this workspace`);
 
-  await client.updateIssue(issue.id, { labelIds: [...keep, target.id] });
+  if (!existing.nodes.some((existingLabel) => existingLabel.id === target.id)) {
+    await client.issueAddLabel(issue.id, target.id);
+  }
+  for (const existingLabel of existing.nodes) {
+    if (lifecycle.has(existingLabel.name) && existingLabel.id !== target.id) {
+      await client.issueRemoveLabel(issue.id, existingLabel.id);
+    }
+  }
 }
 
 /** Clears controller lifecycle state after a human merge. */
 export async function clearAiLifecycleLabels(issueId: string): Promise<void> {
   const client = getLinearClient();
   const issue = await client.issue(issueId);
-  const existing = await issue.labels();
+  const existing = await issue.labels({ first: 100 });
+  await drainConnection(existing);
   const lifecycle = new Set<string>(AI_LIFECYCLE_LABELS);
-  const keep = existing.nodes.filter((label) => !lifecycle.has(label.name)).map((label) => label.id);
-  await client.updateIssue(issue.id, { labelIds: keep });
+  for (const existingLabel of existing.nodes) {
+    if (lifecycle.has(existingLabel.name)) {
+      await client.issueRemoveLabel(issue.id, existingLabel.id);
+    }
+  }
 }
 
 export async function hasLabel(issueId: string, label: string): Promise<boolean> {
   const issue = await getLinearClient().issue(issueId);
-  const labels = await issue.labels();
+  const labels = await issue.labels({ first: 100 });
+  await drainConnection(labels);
   return labels.nodes.some((l) => l.name === label);
 }

@@ -92,6 +92,22 @@ export function createAgents(invoker: Invoker, routing: RoutingConfig) {
           errors.push(error);
           failures.push(`${alias}: ${error instanceof Error ? error.message : String(error)}`);
           remaining.splice(remaining.indexOf(alias), 1);
+          if (isProviderQuotaExhausted(error)) {
+            // Quota pressure is provider-wide, not profile-wide. Trying every
+            // Sol reasoning level on the same ChatGPT account only burns time
+            // and repeats a request that cannot succeed.
+            for (let index = remaining.length - 1; index >= 0; index -= 1) {
+              const candidate = routing.aliases[remaining[index]!];
+              if (candidate?.provider === error.provider) remaining.splice(index, 1);
+            }
+            if (remaining.length === 0) {
+              throw new ProviderQuotaExhaustedError(
+                error.provider,
+                error.resetAt,
+                `all eligible final reviewers: ${failures.join(' | ')}`,
+              );
+            }
+          }
         }
       }
       const quotaErrors = errors.filter(isProviderQuotaExhausted);

@@ -4,12 +4,12 @@ import { z } from 'zod';
  *  every model comparison, so this is a hard failure rather than a warning. */
 const weightsSchema = z
   .object({
-    acceptance_coverage: z.number(),
-    first_pass_ci: z.number(),
-    reviewer_defects: z.number(),
-    unnecessary_churn: z.number(),
-    resource_cost: z.number(),
-    wall_clock: z.number(),
+    acceptance_coverage: z.number().min(0).max(1),
+    first_pass_ci: z.number().min(0).max(1),
+    reviewer_defects: z.number().min(0).max(1),
+    unnecessary_churn: z.number().min(0).max(1),
+    resource_cost: z.number().min(0).max(1),
+    wall_clock: z.number().min(0).max(1),
   })
   .refine(
     (w) => Math.abs(Object.values(w).reduce((a, b) => a + b, 0) - 1) <= 0.001,
@@ -33,8 +33,8 @@ const promotionSchema = z
     low_risk: z.object({
       automatic: z.boolean(),
       minimum_challenger_samples: z.number().int().positive(),
-      minimum_score_advantage: z.number(),
-      minimum_success_rate: z.number(),
+      minimum_score_advantage: z.number().min(0).max(1),
+      minimum_success_rate: z.number().min(0).max(1),
     }),
     medium_risk: z.object({
       automatic: z.literal(false),
@@ -81,10 +81,10 @@ export const scoringConfigSchema = z
       .object({
         verdicts: z.array(z.enum(['PASS', 'PARTIAL', 'FAIL', 'UNCERTAIN'])),
         points: z.object({
-          PASS: z.number(),
-          PARTIAL: z.number(),
-          FAIL: z.number(),
-          UNCERTAIN: z.number(),
+          PASS: z.number().min(0).max(1),
+          PARTIAL: z.number().min(0).max(1),
+          FAIL: z.number().min(0).max(1),
+          UNCERTAIN: z.number().min(0).max(1),
         }),
         require_evidence: z.boolean(),
       })
@@ -94,25 +94,25 @@ export const scoringConfigSchema = z
         requireEvidence: a.require_evidence,
       })),
     first_pass_ci: z
-      .object({ penalty_per_remediation_cycle: z.number() })
+      .object({ penalty_per_remediation_cycle: z.number().min(0) })
       .transform((f) => ({ penaltyPerRemediationCycle: f.penalty_per_remediation_cycle })),
     reviewer_defects: z
       .object({
         severity_penalty: z.object({
-          critical: z.number(),
-          high: z.number(),
-          medium: z.number(),
-          low: z.number(),
+          critical: z.number().min(0),
+          high: z.number().min(0),
+          medium: z.number().min(0),
+          low: z.number().min(0),
         }),
       })
       .transform((r) => ({ severityPenalty: r.severity_penalty })),
     churn: z
-      .object({ penalty: z.record(z.string(), z.number()) })
+      .object({ penalty: z.record(z.string(), z.number().min(0)) })
       .transform((c) => ({ penalty: c.penalty })),
     wall_clock: z
       .object({
-        target_minutes_by_role: z.record(z.string(), z.number()),
-        penalty_per_target_multiple: z.number(),
+        target_minutes_by_role: z.record(z.string(), z.number().positive()),
+        penalty_per_target_multiple: z.number().min(0),
       })
       .transform((w) => ({
         targetMinutesByRole: w.target_minutes_by_role,

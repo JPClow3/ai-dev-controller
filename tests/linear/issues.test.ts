@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setLinearClient } from '../../src/linear/client.js';
-import { listIssuesCreatedBetween, updateIssueContract } from '../../src/linear/issues.js';
+import {
+  getIssueContract,
+  listIssuesByLabel,
+  listIssuesCreatedBetween,
+  updateIssueContract,
+} from '../../src/linear/issues.js';
 
 beforeEach(() => setLinearClient(null));
 afterEach(() => setLinearClient(null));
@@ -22,6 +27,74 @@ describe('curated Linear contract write-back', () => {
       title: 'Report an Ink shortfall',
       description: '# Goal\nReport the shortfall.',
     });
+  });
+});
+
+describe('paginated Linear reads', () => {
+  it('finds an ai-ready issue after the first server page', async () => {
+    const issue = {
+      id: 'ready-id',
+      identifier: 'JP-101',
+      title: 'Ready issue',
+      url: 'https://linear.example/JP-101',
+      updatedAt: new Date('2026-08-11T12:31:00.000Z'),
+      labels: vi.fn(async () => ({ nodes: [{ name: 'ai-ready' }] })),
+      project: Promise.resolve({ name: 'Lorebound' }),
+    };
+    const result = {
+      nodes: [] as Array<typeof issue>,
+      pageInfo: { hasNextPage: true },
+      async fetchNext() {
+        this.nodes.push(issue);
+        this.pageInfo.hasNextPage = false;
+      },
+    };
+    const issues = vi.fn(async () => result);
+    setLinearClient({ issues } as never);
+
+    await expect(listIssuesByLabel('ai-ready')).resolves.toEqual([
+      expect.objectContaining({ identifier: 'JP-101' }),
+    ]);
+    expect(issues).toHaveBeenCalledWith({
+      filter: { labels: { name: { eq: 'ai-ready' } } },
+      first: 100,
+    });
+  });
+
+  it('collects blockers and labels from later connection pages', async () => {
+    const labels = {
+      nodes: [{ name: 'Bug' }],
+      pageInfo: { hasNextPage: true },
+      async fetchNext() {
+        this.nodes.push({ name: 'ai-ready' });
+        this.pageInfo.hasNextPage = false;
+      },
+    };
+    const inverseRelations = {
+      nodes: [] as Array<{ type: string; issue: Promise<{ identifier: string }> }>,
+      pageInfo: { hasNextPage: true },
+      async fetchNext() {
+        this.nodes.push({ type: 'blocks', issue: Promise.resolve({ identifier: 'JP-99' }) });
+        this.pageInfo.hasNextPage = false;
+      },
+    };
+    setLinearClient({
+      issue: vi.fn(async () => ({
+        id: 'id',
+        identifier: 'JP-100',
+        title: 'Blocked issue',
+        description: '',
+        url: 'https://linear.example/JP-100',
+        updatedAt: new Date('2026-08-11T12:31:00.000Z'),
+        labels: vi.fn(async () => labels),
+        project: Promise.resolve(null),
+        inverseRelations: vi.fn(async () => inverseRelations),
+      })),
+    } as never);
+
+    const contract = await getIssueContract('JP-100');
+    expect(contract.labels).toEqual(['Bug', 'ai-ready']);
+    expect(contract.blockedBy).toEqual(['JP-99']);
   });
 });
 

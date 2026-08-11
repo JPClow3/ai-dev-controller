@@ -24,7 +24,11 @@ import {
   commentOnIssue,
 } from '../linear/issues.js';
 import { clearAiLifecycleLabels, setAiLifecycleLabel } from '../linear/labels.js';
-import { AUTO_CURATE_CURSOR_KEY, autoCurateNewIssues } from '../linear/auto-curate.js';
+import {
+  AUTO_CURATE_CURSOR_KEY,
+  AUTO_CURATE_FLOOR_KEY,
+  autoCurateNewIssues,
+} from '../linear/auto-curate.js';
 import { postBlockerQuestion } from '../linear/dependencies.js';
 import {
   findPullRequestByBranch,
@@ -58,6 +62,7 @@ import { projectToLinear } from './states.js';
 import { finalizeRunScores } from '../scoring/runtime.js';
 import { resolveRepository } from '../projects/resolver.js';
 import { selectModel } from '../routing/selector.js';
+import { forcePilotAlias } from '../routing/forced.js';
 import {
   curateIssues as processCuration,
   normalizeCuratedBody,
@@ -124,16 +129,9 @@ export function buildController(options: WiringOptions) {
   if (forced && !config.routing.aliases[forced]) {
     throw new Error(`AI_DEV_FORCE_ALIAS="${forced}" is not a declared alias`);
   }
-  if (forced) log.warn(`AI_DEV_FORCE_ALIAS=${forced}: every role will use this alias`);
+  if (forced) log.warn(`AI_DEV_FORCE_ALIAS=${forced}: every non-safety role will use this alias`);
 
-  const routingConfig = forced
-    ? {
-        ...config.routing,
-        roles: Object.fromEntries(
-          Object.entries(config.routing.roles).map(([role]) => [role, { champion: forced, challengers: [] }]),
-        ),
-      }
-    : config.routing;
+  const routingConfig = forced ? forcePilotAlias(config.routing, forced) : config.routing;
 
   const routing = {
     routing: routingConfig,
@@ -324,7 +322,7 @@ export function buildController(options: WiringOptions) {
         if (isProviderQuotaExhausted(err)) {
           const resetAt = applyQuotaCooldown(repos, pressure, err);
           log.warn(
-            `${run.issueId}: ${err.provider} exhausted; final review paused until ${resetAt.toISOString()}`,
+            `${run.issueId}: ${err.provider} exhausted; ${ctx.run.state} paused until ${resetAt.toISOString()}`,
           );
         } else {
           log.error(`${run.issueId}: step failed`, (err as Error).message);
@@ -520,6 +518,8 @@ export function buildController(options: WiringOptions) {
       const report = await autoCurateNewIssues({
         getCursor: () => repos.getControllerMeta(AUTO_CURATE_CURSOR_KEY),
         setCursor: (value) => repos.setControllerMeta(AUTO_CURATE_CURSOR_KEY, value),
+        getFloor: () => repos.getControllerMeta(AUTO_CURATE_FLOOR_KEY),
+        setFloor: (value) => repos.setControllerMeta(AUTO_CURATE_FLOOR_KEY, value),
         fetchIssues: listIssuesCreatedBetween,
         resolveRepository(issue) {
           const resolution = resolveRepository(issue, config.registry);
@@ -658,6 +658,14 @@ export function buildController(options: WiringOptions) {
         },
         async setLifecycle(identifier, label) {
           if (writeToLinear) await setAiLifecycleLabel(identifier, label);
+        },
+        onFailure(issue, error) {
+          if (!isProviderQuotaExhausted(error)) return 'continue';
+          const resetAt = applyQuotaCooldown(repos, pressure, error);
+          log.warn(
+            `${issue.identifier}: ${error.provider} exhausted; curation paused until ${resetAt.toISOString()}`,
+          );
+          return 'stop';
         },
       });
 

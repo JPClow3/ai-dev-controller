@@ -537,6 +537,28 @@ export function createRepositories(db: ControllerDatabase) {
       return row.n;
     },
 
+    /** Workers launched but not yet harvested by a controller tick. */
+    activeWorkerCount(runId?: string): number {
+      const row = db.raw
+        .prepare(
+          `SELECT COUNT(*) AS n FROM tasks
+            WHERE state = 'DISPATCHED'${runId ? ' AND run_id = ?' : ''}`,
+        )
+        .get(...(runId ? [runId] : [])) as { n: number };
+      return row.n;
+    },
+
+    activeWorkerCountForRepository(repositoryId: string): number {
+      const row = db.raw
+        .prepare(
+          `SELECT COUNT(*) AS n FROM tasks
+             JOIN runs ON runs.id = tasks.run_id
+            WHERE tasks.state = 'DISPATCHED' AND runs.repository_id = ?`,
+        )
+        .get(repositoryId) as { n: number };
+      return row.n;
+    },
+
     latestWorkerAttempt(runId: string, taskKey: string): { aliasId: string; isChallenger: boolean; startedAt: string; baseSha: string | null } | null {
       const row = db.raw
         .prepare(

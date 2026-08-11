@@ -145,6 +145,20 @@ describe('worker attempt budget', () => {
     expect(repos.latestWorkerAttempt(run.id, 'api')).toMatchObject({ aliasId: 'luna_high', isChallenger: true });
     expect(repos.latestWorkerAttempt(run.id, 'api')?.startedAt).toBeTruthy();
   });
+
+  it('counts only workers that are still dispatched as consuming global capacity', () => {
+    const run = repos.claimIssueRun('UNI-142', 'climagro-django')!;
+    repos.recordTasks(run.id, [{ id: 'api' }, { id: 'web' }]);
+    repos.recordAttempt(run.id, 'api', { aliasId: 'luna_high', role: 'worker' });
+    repos.recordAttempt(run.id, 'web', { aliasId: 'luna_high', role: 'worker' });
+    repos.markWorkerLaunched(run.id, 'api');
+
+    expect(repos.activeWorkerCount()).toBe(1);
+    expect(repos.activeWorkerCount(run.id)).toBe(1);
+    expect(repos.activeWorkerCountForRepository('climagro-django')).toBe(1);
+    repos.setTaskState(run.id, 'api', 'DONE');
+    expect(repos.activeWorkerCount()).toBe(0);
+  });
 });
 
 describe('curated issue contract', () => {

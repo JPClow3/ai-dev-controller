@@ -21,6 +21,7 @@ vi.mock('../../src/linear/client.js', () => ({
 }));
 
 const { getIssueContract } = await import('../../src/linear/issues.js');
+const { getExplicitBlockers } = await import('../../src/linear/dependencies.js');
 
 /** The two sides of a single "JP-8 blocks JP-9" relation, as Linear reports them. */
 function linearIssue(identifier: string, sides: { blocks?: string[]; blockedBy?: string[] }) {
@@ -90,5 +91,27 @@ describe('an issue is blocked by what points at it', () => {
     issue.mockResolvedValue(linearIssue('JP-8', {}));
     const contract = await getIssueContract('JP-8');
     expect(contract.url).toBe('https://linear.app/x/issue/JP-8');
+  });
+
+  it('uses inverse relations and drains every page in the standalone dependency reader', async () => {
+    const connection = {
+      nodes: [] as Array<{ type: string; issue: Promise<{ identifier: string }> }>,
+      pageInfo: { hasNextPage: true },
+      async fetchNext() {
+        this.nodes.push({ type: 'blocks', issue: Promise.resolve({ identifier: 'JP-8' }) });
+        this.pageInfo.hasNextPage = false;
+      },
+    };
+    issue.mockResolvedValue({
+      ...linearIssue('JP-9', {}),
+      inverseRelations: vi.fn(async () => connection),
+      relations: vi.fn(() => {
+        throw new Error('forward relations must not be read');
+      }),
+    });
+
+    await expect(getExplicitBlockers('JP-9')).resolves.toEqual([
+      { issueIdentifier: 'JP-9', blockedByIdentifier: 'JP-8' },
+    ]);
   });
 });

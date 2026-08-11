@@ -45,7 +45,7 @@ function deps(over: Partial<OrchestratorDeps> = {}): OrchestratorDeps {
     createWorktrees: vi.fn(async () => undefined),
     workersSettled: vi.fn(async () => ({ allSettled: true, interrupted: [] })),
     retryInterruptedWorkers: vi.fn(async () => true),
-    dispatchNextWave: vi.fn(async () => 0),
+    dispatchNextWave: vi.fn(async () => ({ started: 0, capacityBlocked: false })),
     integrate: vi.fn(async () => ({ conflicts: [], headSha: 'abc1234567' })),
     runValidation: vi.fn(async () => ({
       passed: true,
@@ -249,6 +249,14 @@ describe('it waits instead of guessing', () => {
     const result = await advanceRun(ctx('IMPLEMENTING'), d);
     expect(result.to).toBeNull();
     expect(result.action).toBe('waiting');
+  });
+
+  it('holds in IMPLEMENTING when a next wave is queued behind worker capacity', async () => {
+    const d = deps({ dispatchNextWave: vi.fn(async () => ({ started: 0, capacityBlocked: true })) });
+    const result = await advanceRun(ctx('IMPLEMENTING'), d);
+    expect(result.to).toBeNull();
+    expect(result.detail).toMatch(/worker capacity/);
+    expect(d.integrate).not.toHaveBeenCalled();
   });
 
   it('holds in CI while checks are still running', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, cpSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadControllerConfig, ConfigError } from '../../src/config/load-config.js';
@@ -93,6 +93,17 @@ wall_clock:
     expect(() => loadControllerConfig(dir)).toThrow(/sum to 1\.0/);
   });
 
+  it('rejects negative scoring weights even when their total still equals 1.0', () => {
+    const dir = scratchRoot();
+    const path = join(dir, 'config/scoring.yaml');
+    const scoring = readFileSync(path, 'utf8')
+      .replace('acceptance_coverage: 0.35', 'acceptance_coverage: -0.10')
+      .replace('first_pass_ci: 0.25', 'first_pass_ci: 0.70');
+    writeFileSync(path, scoring);
+
+    expect(() => loadControllerConfig(dir)).toThrow(/greater than or equal to 0/);
+  });
+
   it('rejects a routing role whose champion is not a declared alias', () => {
     const dir = scratchRoot();
     const routing = `aliases:
@@ -116,6 +127,18 @@ pressure:
 `;
     writeFileSync(join(dir, 'config/routing.yaml'), routing);
     expect(() => loadControllerConfig(dir)).toThrow(/unknown alias "does_not_exist"/);
+  });
+
+  it('rejects a risk gate that locks work to an unknown role', () => {
+    const dir = scratchRoot();
+    const path = join(dir, 'config/routing.yaml');
+    const routing = readFileSync(path, 'utf8').replace(
+      'locked_role: high_risk',
+      'locked_role: typo_high_risk',
+    );
+    writeFileSync(path, routing);
+
+    expect(() => loadControllerConfig(dir)).toThrow(/unknown role "typo_high_risk"/);
   });
 
   it('requires requirement_ambiguity to escalate to a human', () => {

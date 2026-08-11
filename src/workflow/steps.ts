@@ -316,7 +316,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
    * Shared by the first wave and every later one so a task dispatched second
    * is dispatched identically to a task dispatched first.
    */
-  async function dispatchTask(ctx: StepContext, task: PlanTask): Promise<void> {
+  async function dispatchTask(ctx: StepContext, task: PlanTask): Promise<boolean> {
     const parent = ctx.run.orcaWorktreeId;
     if (!parent) throw new Error(`Run ${ctx.run.id} has no parent worktree`);
 
@@ -337,6 +337,16 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
     const persisted = repos.runTasks(ctx.run.id).find((candidate) => candidate.id === task.id);
     const attemptsBefore = repos.workerAttemptCount(ctx.run.id, task.id);
     const resumingDispatch = persisted?.state === 'DISPATCHING' && attemptsBefore > 0;
+    const repositoryCap =
+      config.registry.projects[ctx.projectId]?.maxAgents ?? config.global.concurrency.agentsPerRepository;
+    if (
+      !resumingDispatch &&
+      (repos.activeWorkerCount() >= config.global.concurrency.globalAgents ||
+        repos.activeWorkerCount(ctx.run.id) >= config.global.concurrency.workersPerIssue ||
+        repos.activeWorkerCountForRepository(ctx.projectId) >= repositoryCap)
+    ) {
+      return false;
+    }
     const prior = resumingDispatch ? repos.latestWorkerAttempt(ctx.run.id, task.id) : null;
     const selected = prior ? null : selectModel(
       {
@@ -404,7 +414,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       // Either the worker process wrote its heartbeat or Orca confirms that
       // the deterministic terminal was created before the controller crashed.
       repos.markWorkerLaunched(ctx.run.id, task.id);
-      return;
+      return true;
     }
     // A retried task reuses its controller-owned control directory. Old
     // sentinels would otherwise make the replacement look finished before it
@@ -429,6 +439,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
 
     repos.markWorkerLaunched(ctx.run.id, task.id);
     log.info(`${ctx.run.issueId}/${task.id}: dispatched to ${alias} (${profile})`);
+    return true;
   }
 
   /**
@@ -617,7 +628,12 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       for (const task of tasks.filter((t) => (t.blocked_by ?? []).length > 0)) {
         log.info(`${ctx.run.issueId}/${task.id}: deferred behind ${(task.blocked_by ?? []).join(', ')}`);
       }
-      for (const task of runnable) await dispatchTask(ctx, task);
+      for (const task of runnable) {
+        if (!(await dispatchTask(ctx, task))) {
+          log.info(`${ctx.run.issueId}/${task.id}: waiting for worker capacity`);
+          break;
+        }
+      }
     },
 
     /**
@@ -634,8 +650,9 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       const ready = tasks.filter(
         (t) => t.state === 'PENDING' && t.blocked_by.every((b) => done.has(b)),
       );
+      let started = 0;
       for (const task of ready) {
-        await dispatchTask(ctx, {
+        const dispatched = await dispatchTask(ctx, {
           id: task.id,
           summary: task.summary,
           task_category: task.task_category,
@@ -644,8 +661,10 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
           acceptance_criteria: task.acceptance_criteria,
           ...(task.risk ? { risk: task.risk as NonNullable<PlanTask['risk']> } : {}),
         });
+        if (!dispatched) return { started, capacityBlocked: true };
+        started += 1;
       }
-      return ready.length;
+      return { started, capacityBlocked: false };
     },
 
     /**
@@ -657,12 +676,13 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
      * vacuously true on the first tick and every worker was declared settled
      * the instant it was launched. It also scoped the query to the PARENT
      * worktree, which never contains worker terminals at all.
-     */
+    */
     async workersSettled(ctx) {
+      let pending = 0;
       const dispatching = repos.runTasks(ctx.run.id).filter((task) => task.state === 'DISPATCHING');
       for (const task of dispatching) {
         const risk: Risk = task.risk === 'medium' || task.risk === 'high' ? task.risk : 'low';
-        await dispatchTask(ctx, {
+        if (!(await dispatchTask(ctx, {
           id: task.id,
           summary: task.summary,
           task_category: task.task_category,
@@ -670,11 +690,10 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
           blocked_by: task.blocked_by,
           acceptance_criteria: task.acceptance_criteria,
           risk,
-        });
+        }))) pending += 1;
       }
       const tasks = repos.runTasks(ctx.run.id).filter((t) => t.state === 'DISPATCHED');
       const interrupted: string[] = [];
-      let pending = 0;
 
       for (const task of tasks) {
         if (!task.orcaWorktreeId) continue;

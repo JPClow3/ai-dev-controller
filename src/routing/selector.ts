@@ -22,27 +22,19 @@ export interface SelectorDeps {
  */
 export function selectModel(input: RoutingInput, deps: SelectorDeps): RoutingDecision {
   const { routing } = deps;
-  const role = routing.roles[input.role];
-  if (!role) throw new Error(`Unknown routing role "${input.role}"`);
+  const requestedRole = routing.roles[input.role];
+  if (!requestedRole) throw new Error(`Unknown routing role "${input.role}"`);
+
+  const gate = routing.risk_gates[input.risk];
+  const lockedRole = gate?.lockedRole;
+  const effectiveRoleName = lockedRole ?? input.role;
+  const role = routing.roles[effectiveRoleName];
+  if (!role) throw new Error(`Unknown locked routing role "${effectiveRoleName}"`);
+  const effectiveInput =
+    effectiveRoleName === input.role ? input : { ...input, role: effectiveRoleName };
 
   const rejected: Array<{ alias: string; why: string }> = [];
   const excluded = new Set(input.excludeAliases ?? []);
-
-  // High risk is locked: no experimentation, ever.
-  const gate = routing.risk_gates[input.risk];
-  const lockedRole = gate?.lockedRole;
-  if (lockedRole && lockedRole !== input.role) {
-    const locked = routing.roles[lockedRole];
-    if (locked) {
-      return {
-        alias: locked.champion,
-        reason: 'locked_high_risk',
-        isChallenger: false,
-        utility: Number.POSITIVE_INFINITY,
-        rejected,
-      };
-    }
-  }
 
   const candidates = [role.champion, ...role.challengers].filter((alias) => {
     if (excluded.has(alias)) {
@@ -71,14 +63,14 @@ export function selectModel(input: RoutingInput, deps: SelectorDeps): RoutingDec
 
   if (candidates.length === 0) {
     throw new Error(
-      `No eligible model for role "${input.role}". Rejected: ${rejected
+      `No eligible model for role "${effectiveRoleName}". Rejected: ${rejected
         .map((r) => `${r.alias} (${r.why})`)
         .join('; ')}`,
     );
   }
 
   const scored = candidates
-    .map((alias) => ({ alias, utility: utilityOf(alias, input, deps) }))
+    .map((alias) => ({ alias, utility: utilityOf(alias, effectiveInput, deps) }))
     .sort((a, b) => b.utility - a.utility);
 
   const best = scored[0]!;
@@ -88,6 +80,7 @@ export function selectModel(input: RoutingInput, deps: SelectorDeps): RoutingDec
   // a forced substitution is not an experiment and must not be scored as one.
   const explore =
     championEligible &&
+    !lockedRole &&
     (gate?.allowChallenger ?? false) &&
     deps.scoring.championChallenger.eligibleRisk.includes(input.risk) &&
     role.challengers.length > 0 &&
@@ -100,8 +93,11 @@ export function selectModel(input: RoutingInput, deps: SelectorDeps): RoutingDec
     }
   }
 
-  const reason: RoutingDecision['reason'] =
-    best.alias === role.champion ? 'champion' : championEligible ? 'pressure_shift' : 'pressure_shift';
+  const reason: RoutingDecision['reason'] = lockedRole
+    ? 'locked_high_risk'
+    : best.alias === role.champion
+      ? 'champion'
+      : 'pressure_shift';
 
   return { alias: best.alias, reason, isChallenger: false, utility: best.utility, rejected };
 }

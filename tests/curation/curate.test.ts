@@ -92,6 +92,7 @@ describe('rough Linear issue curation', () => {
 
   it('isolates a failed issue so another rough issue is still curated', async () => {
     const persistCurated = vi.fn(async () => undefined);
+    const onFailure = vi.fn(() => 'continue' as const);
     const report = await curateIssues({
       fetchIssues: async () => [rough('JP-12'), rough('JP-13')],
       resolveRepository: () => ({ ok: true, projectId: 'lorebound', context: '' }),
@@ -102,10 +103,30 @@ describe('rough Linear issue curation', () => {
       persistCurated,
       requestContext: vi.fn(async () => undefined),
       setLifecycle: vi.fn(async () => undefined),
+      onFailure,
     });
 
     expect(report.failed).toEqual([{ identifier: 'JP-12', error: 'provider reset' }]);
     expect(report.curated).toEqual(['JP-13']);
     expect(persistCurated).toHaveBeenCalledOnce();
+    expect(onFailure).toHaveBeenCalledWith(rough('JP-12'), expect.any(Error));
+  });
+
+  it('stops the batch when a shared provider cooldown makes later attempts wasteful', async () => {
+    const invokeCurator = vi.fn(async () => {
+      throw new Error('shared quota exhausted');
+    });
+    const report = await curateIssues({
+      fetchIssues: async () => [rough('JP-14'), rough('JP-15')],
+      resolveRepository: () => ({ ok: true, projectId: 'lorebound', context: '' }),
+      invokeCurator,
+      persistCurated: vi.fn(async () => undefined),
+      requestContext: vi.fn(async () => undefined),
+      setLifecycle: vi.fn(async () => undefined),
+      onFailure: vi.fn(() => 'stop' as const),
+    });
+
+    expect(report.failed).toEqual([{ identifier: 'JP-14', error: 'shared quota exhausted' }]);
+    expect(invokeCurator).toHaveBeenCalledOnce();
   });
 });

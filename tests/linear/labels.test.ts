@@ -12,9 +12,8 @@ import { AI_LIFECYCLE_LABELS } from '../../src/workflow/states.js';
 /**
  * A fake Linear client.
  *
- * `setAiLifecycleLabel` does a read-modify-write on an issue's label set, so a
- * bug there silently strips the user's own Bug/Feature labels. These tests
- * exist to prove it does not.
+ * Label changes use Linear's atomic add/remove mutations, so concurrent user
+ * edits to Bug/Feature labels cannot be overwritten by the controller.
  */
 function fakeLinear(issueLabels: string[]) {
   const workspaceLabels = [...AI_LIFECYCLE_LABELS, 'Bug', 'Feature', 'Improvement'].map((name, i) => ({
@@ -22,7 +21,8 @@ function fakeLinear(issueLabels: string[]) {
     name,
   }));
 
-  const updateIssue = vi.fn(async () => ({ success: true }));
+  const issueAddLabel = vi.fn(async () => ({ success: true }));
+  const issueRemoveLabel = vi.fn(async () => ({ success: true }));
 
   const client = {
     issue: vi.fn(async () => ({
@@ -32,11 +32,12 @@ function fakeLinear(issueLabels: string[]) {
       }),
     })),
     issueLabels: vi.fn(async () => ({ nodes: workspaceLabels })),
-    updateIssue,
+    issueAddLabel,
+    issueRemoveLabel,
   };
 
   setLinearClient(client as never);
-  return { updateIssue, workspaceLabels, nameOf: (id: string) => workspaceLabels.find((l) => l.id === id)?.name };
+  return { issueAddLabel, issueRemoveLabel, workspaceLabels };
 }
 
 beforeEach(() => setLinearClient(null));
@@ -53,10 +54,16 @@ describe('controller-owned autonomous lifecycle', () => {
   });
 
   it('promotes ai-curate to ai-ready through the normal call path', async () => {
-    const { updateIssue, nameOf } = fakeLinear(['ai-curate']);
+    const { issueAddLabel, issueRemoveLabel, workspaceLabels } = fakeLinear(['ai-curate']);
     await setAiLifecycleLabel('UNI-1', 'ai-ready');
-    const names = (updateIssue.mock.calls[0] as unknown as [string, { labelIds: string[] }])[1].labelIds.map(nameOf);
-    expect(names).toEqual(['ai-ready']);
+    expect(issueAddLabel).toHaveBeenCalledWith(
+      'issue-uuid',
+      workspaceLabels.find((label) => label.name === 'ai-ready')!.id,
+    );
+    expect(issueRemoveLabel).toHaveBeenCalledWith(
+      'issue-uuid',
+      workspaceLabels.find((label) => label.name === 'ai-curate')!.id,
+    );
   });
 
   it('allows every lifecycle label', () => {
@@ -68,39 +75,44 @@ describe('controller-owned autonomous lifecycle', () => {
 
 describe('lifecycle label write preserves everything it does not own', () => {
   it('keeps the user own labels', async () => {
-    const { updateIssue, nameOf } = fakeLinear(['ai-curate', 'Bug', 'Improvement']);
+    const { issueAddLabel, issueRemoveLabel, workspaceLabels } = fakeLinear([
+      'ai-curate',
+      'Bug',
+      'Improvement',
+    ]);
     await setAiLifecycleLabel('UNI-1', 'ai-running');
 
-    const [, payload] = updateIssue.mock.calls[0] as unknown as [string, { labelIds: string[] }];
-    const names = payload.labelIds.map(nameOf).sort();
-    expect(names).toEqual(['Bug', 'Improvement', 'ai-running']);
+    expect(issueAddLabel).toHaveBeenCalledTimes(1);
+    expect(issueRemoveLabel).toHaveBeenCalledTimes(1);
+    expect(issueRemoveLabel).toHaveBeenCalledWith(
+      'issue-uuid',
+      workspaceLabels.find((label) => label.name === 'ai-curate')!.id,
+    );
   });
 
   it('replaces the previous lifecycle label rather than accumulating', async () => {
-    const { updateIssue, nameOf } = fakeLinear(['ai-curate']);
+    const { issueRemoveLabel, workspaceLabels } = fakeLinear(['ai-curate']);
     await setAiLifecycleLabel('UNI-1', 'ai-reviewing');
 
-    const [, payload] = updateIssue.mock.calls[0] as unknown as [string, { labelIds: string[] }];
-    const names = payload.labelIds.map(nameOf);
-    expect(names).toEqual(['ai-reviewing']);
-    expect(names).not.toContain('ai-curate');
+    expect(issueRemoveLabel).toHaveBeenCalledWith(
+      'issue-uuid',
+      workspaceLabels.find((label) => label.name === 'ai-curate')!.id,
+    );
   });
 
   it('replaces ai-ready with ai-running while preserving user labels', async () => {
-    const { updateIssue, nameOf } = fakeLinear(['ai-ready', 'Feature']);
+    const { issueAddLabel, issueRemoveLabel } = fakeLinear(['ai-ready', 'Feature']);
     await setAiLifecycleLabel('UNI-1', 'ai-running');
 
-    const names = (updateIssue.mock.calls[0] as unknown as [string, { labelIds: string[] }])[1].labelIds
-      .map(nameOf)
-      .sort();
-    expect(names).toEqual(['Feature', 'ai-running']);
+    expect(issueAddLabel).toHaveBeenCalledTimes(1);
+    expect(issueRemoveLabel).toHaveBeenCalledTimes(1);
   });
 
   it('works on an issue that has no labels at all', async () => {
-    const { updateIssue, nameOf } = fakeLinear([]);
+    const { issueAddLabel, issueRemoveLabel } = fakeLinear([]);
     await setAiLifecycleLabel('UNI-1', 'ai-curate');
-    const names = (updateIssue.mock.calls[0] as unknown as [string, { labelIds: string[] }])[1].labelIds.map(nameOf);
-    expect(names).toEqual(['ai-curate']);
+    expect(issueAddLabel).toHaveBeenCalledTimes(1);
+    expect(issueRemoveLabel).not.toHaveBeenCalled();
   });
 
   it('fails loudly when the workspace is missing the label', async () => {
@@ -108,18 +120,26 @@ describe('lifecycle label write preserves everything it does not own', () => {
     setLinearClient({
       issue: vi.fn(async () => ({ id: 'x', labels: async () => ({ nodes: [] }) })),
       issueLabels: vi.fn(async () => ({ nodes: workspaceLabels })),
-      updateIssue: vi.fn(),
+      issueAddLabel: vi.fn(),
+      issueRemoveLabel: vi.fn(),
     } as never);
 
     await expect(setAiLifecycleLabel('UNI-1', 'ai-running')).rejects.toThrow(/does not exist in this workspace/);
   });
 
   it('clears lifecycle state after merge while preserving user labels', async () => {
-    const { updateIssue, nameOf } = fakeLinear(['ai-pr-open', 'Feature']);
+    const { issueAddLabel, issueRemoveLabel, workspaceLabels } = fakeLinear([
+      'ai-pr-open',
+      'Feature',
+    ]);
     await clearAiLifecycleLabels('UNI-1');
 
-    const names = (updateIssue.mock.calls[0] as unknown as [string, { labelIds: string[] }])[1].labelIds.map(nameOf);
-    expect(names).toEqual(['Feature']);
+    expect(issueAddLabel).not.toHaveBeenCalled();
+    expect(issueRemoveLabel).toHaveBeenCalledTimes(1);
+    expect(issueRemoveLabel).toHaveBeenCalledWith(
+      'issue-uuid',
+      workspaceLabels.find((label) => label.name === 'ai-pr-open')!.id,
+    );
   });
 });
 
@@ -135,5 +155,20 @@ describe('startup lifecycle-label contract', () => {
     } as never);
 
     await expect(assertLifecycleLabelsExist()).rejects.toThrow(/ai-curated/);
+  });
+
+  it('finds required workspace labels beyond the first page', async () => {
+    const labels = AI_LIFECYCLE_LABELS.map((name, index) => ({ id: `label-${index}`, name }));
+    const connection = {
+      nodes: labels.slice(0, 1),
+      pageInfo: { hasNextPage: true },
+      async fetchNext() {
+        this.nodes.push(...labels.slice(1));
+        this.pageInfo.hasNextPage = false;
+      },
+    };
+    setLinearClient({ issueLabels: vi.fn(async () => connection) } as never);
+
+    await expect(assertLifecycleLabelsExist()).resolves.toBeUndefined();
   });
 });

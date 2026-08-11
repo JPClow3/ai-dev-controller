@@ -4,6 +4,7 @@ import { nextEscalation } from '../../src/routing/escalation.js';
 import { defaultPressure, pressureFromOrca, withOverride } from '../../src/routing/pressure.js';
 import { loadControllerConfig } from '../../src/config/load-config.js';
 import { isHumanBlock, type AliasStats } from '../../src/routing/types.js';
+import { forcePilotAlias } from '../../src/routing/forced.js';
 
 const config = loadControllerConfig(process.cwd());
 const { routing, scoring, escalation } = config;
@@ -20,6 +21,12 @@ function deps(overrides: Partial<Parameters<typeof selectModel>[1]> = {}) {
 }
 
 describe('selectModel', () => {
+  it('a pilot alias override preserves every role referenced by a safety lock', () => {
+    const forced = forcePilotAlias(routing, 'luna_low');
+    expect(forced.roles['routine_bugfix']!.champion).toBe('luna_low');
+    expect(forced.roles['high_risk']).toEqual(routing.roles['high_risk']);
+  });
+
   it('picks the configured champion when there is no evidence yet', () => {
     const d = selectModel({ projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' }, deps());
     expect(d.alias).toBe('luna_high');
@@ -52,6 +59,30 @@ describe('selectModel', () => {
     expect(d.alias).toBe('sol_xhigh');
     expect(d.reason).toBe('locked_high_risk');
     expect(d.isChallenger).toBe(false);
+  });
+
+  it('fails closed when the provider for the locked high-risk role is exhausted', () => {
+    const pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
+    expect(() =>
+      selectModel(
+        { projectId: 'lorebound', role: 'routine_bugfix', risk: 'high' },
+        deps({ pressure }),
+      ),
+    ).toThrow(/No eligible model for role "high_risk"/);
+  });
+
+  it('does not re-select an excluded alias through the high-risk lock', () => {
+    expect(() =>
+      selectModel(
+        {
+          projectId: 'lorebound',
+          role: 'routine_bugfix',
+          risk: 'high',
+          excludeAliases: ['sol_xhigh'],
+        },
+        deps(),
+      ),
+    ).toThrow(/already attempted on this task/);
   });
 
   /**
