@@ -80,7 +80,11 @@ pnpm supervisor:install # Windows: survive Codex/terminal/app exits and logon re
 
 ## Windows notebook bootstrap
 
-Audit a notebook without changing it:
+See [the Windows notebook guide](docs/windows-notebook-setup.md) for the
+complete setup, path-mapping rules, and troubleshooting guide.
+
+Audit installed tools and controller connectivity without installing packages,
+creating files, or registering the supervisor:
 
 ```powershell
 .\scripts\setup-windows.ps1
@@ -98,14 +102,13 @@ Install prerequisites and the optional current-user supervisor together:
 .\scripts\setup-windows.ps1 -Install -RepositoryRoot C:\Code -InstallSupervisor
 ```
 
-Add `-InstallSupervisor` to that install command only when the optional
-current-user Windows supervisor should be registered. `winget` is used only
-with `-Install`; the audit never installs packages, creates a scheduled task,
-or modifies files. The script never overwrites credentials, `.env`, the shared
-registry, or an existing local registry unless `-Force` is explicitly passed.
-Sign in manually with `gh auth login`, `codex login`, and the Orca desktop
-setup. Device-specific repository paths are written only to the gitignored,
-path-only `projects/registry.local.yaml` overlay.
+`winget` is used only with `-Install`. The audit does run authenticated
+connectivity checks, including `pnpm cli doctor`, so it can contact configured
+services and report expired sign-ins. The script never overwrites credentials,
+`.env`, the shared registry, or an existing local registry unless `-Force` is
+explicitly passed. Sign in manually with `gh auth login`, `codex login`, and
+the Orca desktop setup. Device-specific repository paths are written only to
+the gitignored, path-only `projects/registry.local.yaml` overlay.
 
 ### Environment variables
 
