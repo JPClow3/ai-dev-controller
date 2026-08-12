@@ -1,0 +1,17 @@
+[
+  {
+    "date": "2026-08-12",
+    "mode": "full-sweep",
+    "scope": "179 tracked files",
+    "healthScore": 94,
+    "findings": {
+      "critical": 0,
+      "warning": 1,
+      "suggestion": 1
+    },
+    "residuals": [
+      "The installed Windows supervisor was interrupted and its two existing Portfolio runs remain blocked until an authorized retry.",
+      "Large orchestration and wiring modules remain candidates for a future boundary extraction, not a safe in-sweep refactor."
+    ]
+  }
+]

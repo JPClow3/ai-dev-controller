@@ -22,7 +22,6 @@ export const WORKFLOW_STATES = [
   'PR_READY',
   'PR_OPEN',
   'MERGED',
-  'NEEDS_CONTEXT',
   'BLOCKED_HUMAN',
   'FAILED',
   'CANCELLED',
@@ -49,7 +48,6 @@ export const TERMINAL_STATES = ['MERGED', 'FAILED', 'CANCELLED'] as const satisf
 export type TerminalState = (typeof TERMINAL_STATES)[number];
 
 export const EXCEPTIONAL_STATES = [
-  'NEEDS_CONTEXT',
   'BLOCKED_HUMAN',
   'FAILED',
   'CANCELLED',
@@ -96,7 +94,6 @@ export const MAINLINE_TRANSITIONS: Readonly<Record<WorkflowState, readonly Workf
   PR_READY: ['FINAL_REVIEW', 'PR_OPEN'],
   PR_OPEN: ['MERGED'],
   MERGED: [],
-  NEEDS_CONTEXT: ['CURATING', 'WAITING_READY'],
   BLOCKED_HUMAN: ['QUEUED', 'PLANNING', 'IMPLEMENTING', 'REMEDIATING'],
   FAILED: ['QUEUED'],
   CANCELLED: [],
@@ -116,8 +113,6 @@ export function nextAfterLocalValidation(trigger: CiTrigger): WorkflowState {
 
 export const AI_LIFECYCLE_LABELS = [
   'ai-curate',
-  'ai-curated',
-  'ai-needs-context',
   'ai-ready',
   'ai-running',
   'ai-blocked',
@@ -141,7 +136,6 @@ export const LINEAR_PROJECTION: Readonly<Record<WorkflowState, AiLifecycleLabel 
   DISCOVERED: 'ai-curate',
   CURATING: 'ai-curate',
   WAITING_READY: 'ai-ready',
-  NEEDS_CONTEXT: 'ai-needs-context',
   QUEUED: 'ai-running',
   PLANNING: 'ai-running',
   IMPLEMENTING: 'ai-running',

@@ -31,8 +31,6 @@ const concurrencySchema = z
 const labelsSchema = z
   .object({
     curate: z.string(),
-    curated: z.string(),
-    needs_context: z.string(),
     ready: z.string(),
     running: z.string(),
     blocked: z.string(),
@@ -41,8 +39,6 @@ const labelsSchema = z
   })
   .transform((l) => ({
     curate: l.curate,
-    curated: l.curated,
-    needsContext: l.needs_context,
     ready: l.ready,
     running: l.running,
     blocked: l.blocked,

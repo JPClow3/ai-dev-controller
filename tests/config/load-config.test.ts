@@ -37,8 +37,7 @@ describe('loadControllerConfig', () => {
 
   it('translates snake_case YAML into camelCase runtime objects', () => {
     const config = loadControllerConfig(ROOT);
-    expect(config.global.linear.labels.needsContext).toBe('ai-needs-context');
-    expect(config.global.linear.labels.curated).toBe('ai-curated');
+    expect(config.global.linear.labels.ready).toBe('ai-ready');
     expect(config.global.git.branchPrefix).toBe('ai/');
     expect(config.scoring.promotion.lowRisk.minimumChallengerSamples).toBe(12);
   });

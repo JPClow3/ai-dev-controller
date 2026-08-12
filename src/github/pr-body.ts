@@ -12,6 +12,7 @@ export interface PrWorker {
 export interface PrValidation {
   name: string;
   passed: boolean;
+  command?: string;
 }
 
 export interface PrBodyInput {
@@ -47,6 +48,8 @@ const mark = (ok: boolean) => (ok ? 'pass' : 'FAIL');
 export function renderPrBody(input: PrBodyInput): string {
   const lines: string[] = [];
 
+  lines.push('## Decision', '', 'Ready for your review — draft PR; you remain the merge authority.', '');
+
   lines.push('## Linear', '');
   lines.push(input.issueUrl ? `[${input.issueId}](${input.issueUrl})` : input.issueId, '');
 
@@ -67,7 +70,10 @@ export function renderPrBody(input: PrBodyInput): string {
     // Silence here would read as "nothing to report" rather than "nothing ran".
     lines.push('**No local validation commands were declared by this repository.**');
   } else {
-    for (const v of input.validation) lines.push(`- ${v.name}: ${mark(v.passed)}`);
+    for (const v of input.validation) {
+      const command = v.command ? ` — \`${v.command}\`` : '';
+      lines.push(`- ${v.name}: ${mark(v.passed)}${command}`);
+    }
   }
   if (input.ciChecks && input.ciChecks.length > 0) {
     lines.push('', '### CI');
@@ -116,6 +122,10 @@ export function renderPrBody(input: PrBodyInput): string {
 /** Placeholder body for the PR opened purely to trigger CI. */
 export function renderStubPrBody(issueId: string): string {
   return [
+    '## Decision',
+    '',
+    'Not ready — CI is running.',
+    '',
     `## Linear`,
     '',
     issueId,

@@ -20,7 +20,7 @@ export interface AutoCurateDeps {
 
 export interface AutoCurateReport {
   adopted: string[];
-  needsContext: string[];
+  curationBlocked: string[];
   skipped: string[];
 }
 
@@ -40,7 +40,7 @@ export async function autoCurateNewIssues(
 ): Promise<AutoCurateReport> {
   const throughInclusive = now.toISOString();
   const afterExclusive = deps.getCursor();
-  const report: AutoCurateReport = { adopted: [], needsContext: [], skipped: [] };
+  const report: AutoCurateReport = { adopted: [], curationBlocked: [], skipped: [] };
 
   if (!afterExclusive) {
     deps.setCursor(throughInclusive);
@@ -67,8 +67,8 @@ export async function autoCurateNewIssues(
     const resolution = deps.resolveRepository(issue);
     if (!resolution.ok) {
       await deps.requestContext(issue.identifier, resolution.message, resolution.candidates);
-      await deps.setLifecycle(issue.identifier, 'ai-needs-context');
-      report.needsContext.push(issue.identifier);
+      await deps.setLifecycle(issue.identifier, 'ai-blocked');
+      report.curationBlocked.push(issue.identifier);
       continue;
     }
 

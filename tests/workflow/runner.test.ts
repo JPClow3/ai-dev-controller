@@ -27,7 +27,7 @@ function deps(overrides: Partial<RunnerDeps> = {}): RunnerDeps {
     remediationBacklog: vi.fn(async () => 0),
     providerPressures: vi.fn(async () => ['NORMAL' as const]),
     dispatch: vi.fn(async () => undefined),
-    markNeedsContext: vi.fn(async () => undefined),
+    markCurationBlocked: vi.fn(async () => undefined),
     flagCycle: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -115,19 +115,19 @@ describe('dependencies still gate on merge', () => {
 });
 
 describe('repository resolution', () => {
-  it('marks an unresolvable issue as needing context instead of guessing', async () => {
-    const markNeedsContext = vi.fn(async () => undefined);
+  it('marks an unresolvable issue as blocked instead of guessing', async () => {
+    const markCurationBlocked = vi.fn(async () => undefined);
     const dispatch = vi.fn(async () => undefined);
     const report = await runSchedulerTick(
       deps({
         fetchReadyIssues: vi.fn(async () => [issue('UNI-9', { projectName: 'No Such Project' })]),
-        markNeedsContext,
+        markCurationBlocked,
         dispatch,
       }),
     );
 
-    expect(report.needsContext).toEqual(['UNI-9']);
-    expect(markNeedsContext).toHaveBeenCalledOnce();
+    expect(report.curationBlocked).toEqual(['UNI-9']);
+    expect(markCurationBlocked).toHaveBeenCalledOnce();
     expect(dispatch).not.toHaveBeenCalled();
   });
 });

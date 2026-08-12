@@ -47,6 +47,24 @@ export function readSetupCommand(repoPath: string): ValidationCommand | null {
   return { name: 'setup', command: setup.command, required: setup.required !== false };
 }
 
+/**
+ * A fresh linked worktree has no dependencies. Repository configuration wins,
+ * but a lockfile makes one package-manager setup command deterministic enough
+ * to infer safely when the bootstrap contract omitted it.
+ */
+export function readEffectiveSetupCommand(repoPath: string): ValidationCommand | null {
+  const declared = readSetupCommand(repoPath);
+  if (declared) return declared;
+
+  const inferred = [
+    existsSync(join(repoPath, 'package-lock.json')) && 'npm ci',
+    existsSync(join(repoPath, 'pnpm-lock.yaml')) && 'pnpm install --frozen-lockfile',
+    existsSync(join(repoPath, 'yarn.lock')) && 'yarn install --immutable',
+  ].filter((command): command is string => Boolean(command));
+  if (inferred.length !== 1) return null;
+  return { name: 'setup', command: inferred[0]!, required: true };
+}
+
 export interface RunnerDeps {
   exec?: (
     command: string,

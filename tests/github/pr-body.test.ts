@@ -36,6 +36,10 @@ describe('the PR body carries provenance', () => {
     expect(body).toContain('[UNI-142](https://linear.app/unirv/issue/UNI-142)');
   });
 
+  it('leads with an explicit human-review decision', () => {
+    expect(body).toMatch(/## Decision\s+Ready for your review — draft PR; you remain the merge authority\./);
+  });
+
   it('shows acceptance criteria as checkable items', () => {
     expect(body).toContain('- [x] AC-1: Sessions survive a browser restart.');
   });
@@ -85,8 +89,12 @@ describe('the body is honest about weak evidence', () => {
   });
 
   it('shows a failed check as FAIL, not a tick', () => {
-    const body = renderPrBody({ ...base, validation: [{ name: 'test', passed: false }] });
+    const body = renderPrBody({
+      ...base,
+      validation: [{ name: 'test', passed: false, command: 'pnpm test' }],
+    });
     expect(body).toContain('- test: FAIL');
+    expect(body).toContain('`pnpm test`');
   });
 });
 
@@ -95,6 +103,7 @@ describe('the CI-trigger stub PR', () => {
 
   it('warns not to review or merge it yet', () => {
     expect(stub).toContain('**Work in progress — do not review or merge yet.**');
+    expect(stub).toMatch(/## Decision\s+Not ready — CI is running\./);
   });
 
   it('explains why it exists', () => {

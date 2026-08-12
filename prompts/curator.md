@@ -31,12 +31,15 @@ No prose outside the JSON.
 
 ## Rules
 
-1. **You may pull repository facts into the issue.** File paths, existing config
-   names, current behaviour read from code - all fair game, and preferred.
+1. **Curation resolves available context before it asks for help.** Pull
+   repository facts into the issue: file paths, existing config names, current
+   behaviour read from code, project conventions, and relevant sibling issues
+   are all fair game, and preferred.
 2. **You may not invent product decisions.** If the issue does not determine
    the intended behaviour and the repository does not document it, you do not
-   pick a reasonable-sounding default. You emit `needs_context` with a specific
-   question.
+   pick a reasonable-sounding default. Only after exhausting the supplied
+   issue and repository context do you emit `needs_context` with a specific
+   question; this is a genuine human blocker, not a routine curation result.
    - Wrong: "Long session lifetime is undocumented, 30 days sounds reasonable."
    - Right: `needs_context`, question: "What lifetime should remember-me sessions have?"
 3. **Acceptance criteria must be mechanically checkable.** Each one should be

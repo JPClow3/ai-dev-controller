@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { openDatabase, type ControllerDatabase } from '../../src/state/db.js';
 import { createRepositories } from '../../src/state/repositories.js';
 import { renderPrBody } from '../../src/github/pr-body.js';

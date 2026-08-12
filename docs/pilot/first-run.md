@@ -67,7 +67,7 @@ each other in.
 | 38 | Recovery could advance only one ordinary state-machine edge per observation | A crash after several completed external effects could not converge directly to the authoritative state |
 | 39 | Worker-attempt persistence happened after Orca worktree creation | A crash in that window could launch a duplicate child worktree on restart |
 | 40 | Generic recovery could move `BLOCKED_HUMAN` automatically | A state intended to require a human decision was not sticky |
-| 41 | Successful curation projected `ai-needs-context` | Linear could not distinguish a contract ready for human approval from one missing information |
+| 41 | Successful curation did not advance directly to `ai-ready` | The prior workflow introduced an unnecessary human approval boundary after curation |
 | 42 | Curated role and risk were persisted but overwritten or ignored during dispatch | The planner could receive a different routing context from the curator's decision |
 | 43 | `branch_push` and `none` CI modes never ensured a pull request existed | Those supported policies could reach `PR_READY` without a PR to finalize |
 | 44 | The initially-created draft PR retained its provisional `JP-8: in progress` title | The final GitHub handoff did not reflect the curated Linear issue title |
@@ -233,15 +233,14 @@ JP-8 reached `PR_OPEN` and produced one real draft pull request:
 - A separate rough Lorebound issue, [JP-10](https://linear.app/jpclow/issue/JP-10/add-a-display-helper-for-ink-shortfalls),
   was created with only `ai-curate`. The live runner invoked `gpt-luna-low`
   through `codex exec` with `windows.sandbox="unelevated"`, rewrote the issue
-  into a repository-aware contract with AC-1 through AC-6, and stopped at
-  `ai-curated`, awaiting the human `ai-ready` decision. It created no run,
-  branch, worktree or PR.
+  into a repository-aware contract with AC-1 through AC-6, then stopped under
+  the former manual-release policy. It created no run, branch, worktree or PR.
 
 ## Second-wave evidence: JP-9 and JP-10
 
-After the human merged JP-8's PR and applied `ai-ready` to JP-10, the live
-Codex-only controller unblocked both issues without recreating JP-8 or requiring
-an operator state transition.
+After the human merged JP-8's PR and released JP-10 under that former policy,
+the live Codex-only controller unblocked both issues without recreating JP-8 or
+requiring an operator state transition.
 
 - JP-10 completed planning and implementation with Codex, passed the full local
   validation contract and GitHub Actions, received a zero-finding final review,

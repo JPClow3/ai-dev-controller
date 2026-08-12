@@ -15,7 +15,7 @@ result, and open a draft GitHub PR — with you as the only merge authority.
 | --- | --- | --- |
 | Node 24 LTS, `engines: >=24 <25` | **Node 26.4.0** installed | `engines` is `>=24`. Do not downgrade. |
 | `better-sqlite3@^11.8.1` | v11 has **no Node 26 prebuild** | Pinned **`^13.0.3`**, which ships prebuilds for win32-x64. No compile, no VS Build Tools. |
-| `pnpm add` just works | pnpm 11 **blocks install scripts** and fails `pnpm test` on its own gate | `pnpm-workspace.yaml` declares both blocked packages triaged; `.npmrc` sets `verify-deps-before-run=false`. |
+| `pnpm add` just works | pnpm 11 **blocks install scripts** and fails `pnpm test` on its own gate | `pnpm-workspace.yaml` declares both blocked packages triaged. |
 | Codex profiles are additive | Your `config.toml` sets `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` globally | Every worker profile **pins its own** `sandbox_mode = "workspace-write"`. Your interactive session is untouched. |
 | Model access available | **Codex weekly quota at 100%**, resets Sat ~12:49; **Ollama not installed** | No worker models until either is resolved. Tasks 1–5 need none. |
 | `orca skills install --skill ...` | Skills are **bundled** with the CLI (`orca skills list`) | No install step needed. |

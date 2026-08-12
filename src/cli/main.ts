@@ -449,7 +449,7 @@ program
         console.log(
           `adopted ${last.adopted} | curated ${last.curated} | ready ${last.readyIssues.length} | ` +
           `dispatched ${last.dispatched.length} | ` +
-            `blocked ${last.blockedIssues.length} | needs-context ${last.needsContext.length}` +
+            `blocked ${last.blockedIssues.length} | curation-blocked ${last.curationBlocked.length}` +
             (last.throttled ? ' | THROTTLED' : ''),
         );
       }

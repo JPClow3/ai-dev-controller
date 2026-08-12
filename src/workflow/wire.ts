@@ -29,7 +29,7 @@ import {
   AUTO_CURATE_FLOOR_KEY,
   autoCurateNewIssues,
 } from '../linear/auto-curate.js';
-import { postBlockerQuestion } from '../linear/dependencies.js';
+import { postBlockerNotice, postBlockerQuestion } from '../linear/dependencies.js';
 import {
   findPullRequestByBranch,
   listRecentlyMerged,
@@ -538,20 +538,18 @@ export function buildController(options: WiringOptions) {
         },
         setLifecycle: setAiLifecycleLabel,
         async requestContext(identifier, message, candidates) {
-          await commentOnIssue(
-            identifier,
-            [
-              'AI controller could not resolve a repository for this new issue:',
-              `- ${message}`,
-              ...(candidates?.length ? [`- Candidate repositories: ${candidates.join(', ')}`] : []),
-            ].join('\n'),
-          );
+          await postBlockerNotice({
+            issueId: identifier,
+            trigger: 'curation_needs_context',
+            reason: message,
+            ...(candidates?.length ? { evidence: `- Candidate repositories: ${candidates.join(', ')}` } : {}),
+          });
         },
       });
-      for (const identifier of report.needsContext) {
-        log.warn(`${identifier}: new issue needs repository context`);
+      for (const identifier of report.curationBlocked) {
+        log.warn(`${identifier}: new issue is blocked during repository resolution`);
       }
-      return report.adopted.length + report.needsContext.length;
+      return report.adopted.length + report.curationBlocked.length;
     },
 
     async curateIssues() {
@@ -645,16 +643,17 @@ export function buildController(options: WiringOptions) {
         },
         async requestContext(identifier, context: NeedsContext) {
           if (!writeToLinear) return;
-          await commentOnIssue(
-            identifier,
-            [
-              `AI curation needs context (${context.reason}):`,
+          await postBlockerNotice({
+            issueId: identifier,
+            trigger: 'curation_needs_context',
+            reason: context.reason,
+            evidence: [
               ...context.questions.map((question) => `- ${question}`),
               ...(context.candidate_repositories?.length
                 ? [`- Candidate repositories: ${context.candidate_repositories.join(', ')}`]
                 : []),
             ].join('\n'),
-          );
+          });
         },
         async setLifecycle(identifier, label) {
           if (writeToLinear) await setAiLifecycleLabel(identifier, label);
@@ -672,7 +671,7 @@ export function buildController(options: WiringOptions) {
       for (const failure of report.failed) {
         log.warn(`${failure.identifier}: curation failed`, failure.error);
       }
-      return report.curated.length + report.needsContext.length;
+      return report.curated.length + report.curationBlocked.length;
     },
 
     async fetchReadyIssues() {
@@ -766,18 +765,18 @@ export function buildController(options: WiringOptions) {
 
     dispatch: createDispatcher(dispatchDeps),
 
-    async markNeedsContext(identifier, message) {
+    async markCurationBlocked(identifier, message) {
       repos.recordEscalation(identifier, '', 'repository_resolution_ambiguous', message);
       if (!writeToLinear) return;
-      await postBlockerQuestion(identifier, message).catch(() => undefined);
-      await setAiLifecycleLabel(identifier, 'ai-needs-context').catch(() => undefined);
+      await postBlockerQuestion(identifier, message, 'repository_resolution_ambiguous').catch(() => undefined);
+      await setAiLifecycleLabel(identifier, 'ai-blocked').catch(() => undefined);
     },
 
     async flagCycle(identifiers) {
       const message = `Dependency cycle detected: ${identifiers.join(' -> ')}. It cannot resolve on its own.`;
       for (const id of identifiers) {
         repos.recordEscalation(id, '', 'dependency_cycle_detected', message);
-        if (writeToLinear) await postBlockerQuestion(id, message).catch(() => undefined);
+        if (writeToLinear) await postBlockerQuestion(id, message, 'dependency_cycle_detected').catch(() => undefined);
       }
     },
   };

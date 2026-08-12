@@ -14,6 +14,7 @@ import {
   cleanFailedAttempt,
   createSteps,
   effectiveTaskRisk,
+  formatWorkerCommitMessage,
   alignRemediationWorktree,
   remediationPlanTasks,
   shouldWaitForExistingWorkerLaunch,
@@ -22,6 +23,23 @@ import {
 } from '../../src/workflow/steps.js';
 
 describe('worker dispatch recovery boundaries', () => {
+  it('formats concise factual controller commit messages', () => {
+    const message = formatWorkerCommitMessage({
+      issueId: 'JP-6',
+      projectId: 'portfolio',
+      taskId: 'github-fallback-tests',
+      taskCategory: 'test',
+      taskSummary: 'Create a Vitest suite covering the GitHub activity fallback behavior for an empty username.',
+      ownedPaths: ['tests/unit/github.test.ts'],
+      workerSummary: 'Tests could not run because dependencies are not installed.',
+    });
+
+    expect(message.split('\n')[0]).toBe('test(portfolio): create a Vitest suite covering the GitHub… (JP-6)');
+    expect(message.split('\n')[0]!.length).toBeLessThanOrEqual(72);
+    expect(message).toContain('Task: github-fallback-tests');
+    expect(message).toContain('Verification: Tests could not run because dependencies are not installed.');
+  });
+
   it('never lowers an issue risk when a task omits or lowers its own risk', () => {
     expect(effectiveTaskRisk('high', undefined)).toBe('high');
     expect(effectiveTaskRisk('high', 'low')).toBe('high');

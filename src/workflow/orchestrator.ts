@@ -6,6 +6,7 @@ import { nextAfterLocalValidation } from './states.js';
 import type { TransitionEvidence } from './transitions.js';
 import { InvalidTransitionError } from './transitions.js';
 import type { ValidationSummary } from '../validation/result.js';
+import { failureDigest } from '../validation/local.js';
 import type { ChecksSummary } from '../github/checks.js';
 import {
   assessReview,
@@ -13,7 +14,7 @@ import {
   type ReviewResult,
   type ReviewAssessment,
 } from '../reviews/review.js';
-import { planRemediation } from '../reviews/remediation.js';
+import { planRemediation, type RemediationTask } from '../reviews/remediation.js';
 import { overlappingOwnership } from '../git/integration.js';
 import { logger } from '../util/log.js';
 
@@ -257,6 +258,18 @@ async function stepIntegrating(ctx: StepContext, deps: OrchestratorDeps): Promis
 
   if (conflicts.length > 0) {
     // Resolved in the parent, never by letting workers touch each other's trees.
+    recordOperationalRemediation(
+      ctx,
+      deps,
+      conflicts.map((file, findingIndex) => ({
+        findingIndex,
+        file,
+        acceptanceCriterion: null,
+        instruction: `Resolve the integration conflict in ${file}. Keep both independently-owned changes unless their behavior is incompatible.`,
+        suggestedValidation: 'Run the repository validation commands after resolving the conflict.',
+        excludeAliases: deps.originalAuthors(ctx.run.id),
+      })),
+    );
     return move(ctx, deps, 'REMEDIATING', {
       reason: `integration conflicts in ${conflicts.join(', ')}`,
     });
@@ -274,7 +287,25 @@ async function stepIntegrating(ctx: StepContext, deps: OrchestratorDeps): Promis
 async function stepLocalValidation(ctx: StepContext, deps: OrchestratorDeps): Promise<StepResult> {
   const summary = await deps.runValidation(ctx);
 
+  // Setup establishes whether the worktree can be evaluated at all. Sending a
+  // package-manager/auth/network failure to a code-fix worker would hide the
+  // real repository problem and burn a remediation cycle.
+  const setupFailure = summary.results.find((result) => result.name === 'setup' && result.required && !result.passed);
+  if (setupFailure) {
+    const reason = `validation setup failed: ${setupFailure.command}`;
+    await deps.blockForHuman(ctx, 'setup_failed', reason);
+    return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
+  }
+
   if (!summary.passed) {
+    recordOperationalRemediation(ctx, deps, [
+      wholeTreeRemediation(
+        deps,
+        ctx,
+        `Required local validation failed. Diagnose and fix only the failures below.\n\n${failureDigest(summary)}`,
+        summary.results.filter((result) => !result.passed).map((result) => result.command).join(' && '),
+      ),
+    ]);
     return move(ctx, deps, 'REMEDIATING', {
       reason: `local validation failed: ${summary.failedRequired.join(', ')}`,
     });
@@ -333,6 +364,14 @@ async function stepCi(ctx: StepContext, deps: OrchestratorDeps): Promise<StepRes
         detail: `environmental CI failure rerun requested: ${checks.failed.join(', ')}`,
       };
     }
+    recordOperationalRemediation(ctx, deps, [
+      wholeTreeRemediation(
+        deps,
+        ctx,
+        `Required CI checks failed: ${checks.failed.join(', ')}. Inspect the failing check output and make the smallest correction that restores the required checks.`,
+        `Inspect the failed CI check(s): ${checks.failed.join(', ')}`,
+      ),
+    ]);
     return move(ctx, deps, 'REMEDIATING', { reason: `required checks failed: ${checks.failed.join(', ')}` });
   }
 
@@ -438,7 +477,23 @@ async function stepPrReady(ctx: StepContext, deps: OrchestratorDeps): Promise<St
       return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
     }
     const checks = await deps.readChecks(ctx);
-    if (!checks.complete || !checks.allRequiredPassed) {
+    if (!checks.complete) {
+      return {
+        from: ctx.run.state,
+        to: null,
+        action: 'waiting',
+        detail: `checks pending while revalidating final review: ${checks.pending.join(', ')}`,
+      };
+    }
+    if (!checks.allRequiredPassed) {
+      recordOperationalRemediation(ctx, deps, [
+        wholeTreeRemediation(
+          deps,
+          ctx,
+          `Required CI checks failed while revalidating the final review: ${checks.failed.join(', ')}. Inspect the failing check output and make the smallest correction that restores the required checks.`,
+          `Inspect the failed CI check(s): ${checks.failed.join(', ')}`,
+        ),
+      ]);
       return move(ctx, deps, 'REMEDIATING', { reason: 'CI no longer passes while revalidating final review' });
     }
     return move(ctx, deps, 'FINAL_REVIEW', {
@@ -498,7 +553,24 @@ async function stepRemediating(ctx: StepContext, deps: OrchestratorDeps): Promis
     return move(ctx, deps, 'BLOCKED_HUMAN', { reason });
   }
 
-  const pending = deps.repos.pendingRemediation(ctx.run.id);
+  let pending = deps.repos.pendingRemediation(ctx.run.id);
+  if (pending.length === 0) {
+    // Older runs can have reached REMEDIATING before operational remediation
+    // packets were persisted. Local validation is durable evidence, so rebuild
+    // the one whole-tree repair task instead of leaving those runs stranded.
+    const validation = deps.repos.lastValidation(ctx.run.id);
+    if (validation && !validation.passed) {
+      recordOperationalRemediation(ctx, deps, [
+        wholeTreeRemediation(
+          deps,
+          ctx,
+          `Required local validation failed. Diagnose and fix only the failures below.\n\n${failureDigest(validation)}`,
+          validation.results.filter((result) => !result.passed).map((result) => result.command).join(' && '),
+        ),
+      ]);
+      pending = deps.repos.pendingRemediation(ctx.run.id);
+    }
+  }
   if (pending.length === 0) {
     const reason = 'remediation requested but no remediation tasks were recorded';
     await deps.blockForHuman(ctx, 'remediation_empty', reason);
@@ -510,4 +582,35 @@ async function stepRemediating(ctx: StepContext, deps: OrchestratorDeps): Promis
     reason: `remediation cycle ${cycles + 1} dispatched`,
     mechanicalFacts: { planValidated: true, ownershipSetsDisjoint: true, worktreesCreated: true },
   });
+}
+
+/**
+ * Every path into REMEDIATING must leave a durable, runnable packet behind.
+ * Final-review findings already arrive as file-scoped tasks; mechanical
+ * validation and CI failures are not file-scoped, so they run as one worker
+ * over the integrated tree to keep ownership disjoint and the diagnosis intact.
+ */
+function wholeTreeRemediation(
+  deps: OrchestratorDeps,
+  ctx: StepContext,
+  instruction: string,
+  suggestedValidation: string,
+): RemediationTask {
+  return {
+    findingIndex: 0,
+    file: '.',
+    acceptanceCriterion: null,
+    instruction,
+    suggestedValidation,
+    excludeAliases: deps.originalAuthors(ctx.run.id),
+  };
+}
+
+function recordOperationalRemediation(
+  ctx: StepContext,
+  deps: OrchestratorDeps,
+  tasks: RemediationTask[],
+): void {
+  if (tasks.length === 0) throw new Error(`${ctx.run.issueId}: remediation requires at least one task`);
+  deps.repos.recordRemediationPlan(ctx.run.id, tasks);
 }

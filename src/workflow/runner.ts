@@ -20,7 +20,7 @@ export interface TickReport {
   dispatched: WorkItem[];
   skipped: Array<{ item: WorkItem; why: string }>;
   throttled: boolean;
-  needsContext: string[];
+  curationBlocked: string[];
 }
 
 /**
@@ -56,7 +56,7 @@ export interface RunnerDeps {
   remediationBacklog: () => Promise<number>;
   providerPressures: () => Promise<Array<'LOW' | 'NORMAL' | 'HIGH' | 'EXHAUSTED'>>;
   dispatch: (item: WorkItem) => Promise<void>;
-  markNeedsContext: (identifier: string, message: string) => Promise<void>;
+  markCurationBlocked: (identifier: string, message: string) => Promise<void>;
   flagCycle: (identifiers: string[]) => Promise<void>;
 }
 
@@ -88,7 +88,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
   const curated = await deps.curateIssues();
 
   const ready = await deps.fetchReadyIssues();
-  const needsContext: string[] = [];
+  const curationBlocked: string[] = [];
   const resolvedProjects = new Map<string, string>();
 
   const schedulable: SchedulableIssue[] = [];
@@ -100,8 +100,8 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
     if (!resolution.ok) {
       // Refusing is a first-class outcome. Guessing sends agents at the wrong
       // codebase, which is far more expensive than asking.
-      needsContext.push(issue.identifier);
-      await deps.markNeedsContext(issue.identifier, resolution.message);
+      curationBlocked.push(issue.identifier);
+      await deps.markCurationBlocked(issue.identifier, resolution.message);
       continue;
     }
     // Mirror the registry into the database first: `issues.project_id` and
@@ -224,7 +224,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
     dispatched,
     skipped,
     throttled: throttleDecision.throttle,
-    needsContext,
+    curationBlocked,
   };
 }
 

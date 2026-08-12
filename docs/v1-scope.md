@@ -47,8 +47,8 @@ Ambitious but bounded. Each item maps to a module in `src/`.
 ## Suggested build order
 
 1. `state/` + migrations + `config/` loading - nothing works without durable state
-2. `linear/` new-issue adoption + curator, ending at `ai-needs-context` /
-   `NEEDS_CONTEXT` or automatic `ai-ready` / `WAITING_READY`
+2. `linear/` new-issue adoption + curator, ending at automatic `ai-ready` /
+   `WAITING_READY`; genuinely unresolvable work is `ai-blocked`
 3. `registry.ts` resolution, `scheduler/dag.ts`, `scheduler/capacity.ts`
 4. `orca/client.ts` worktree creation only; verify against a throwaway repo
 5. planner + one worker end-to-end on a trivial issue, no review, no PR

@@ -154,7 +154,7 @@ describe('startup lifecycle-label contract', () => {
       issueLabels: vi.fn(async () => ({ nodes: [{ id: 'l1', name: 'ai-ready' }] })),
     } as never);
 
-    await expect(assertLifecycleLabelsExist()).rejects.toThrow(/ai-curated/);
+    await expect(assertLifecycleLabelsExist()).rejects.toThrow(/ai-curate/);
   });
 
   it('finds required workspace labels beyond the first page', async () => {

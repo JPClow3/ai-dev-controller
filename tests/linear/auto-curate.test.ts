@@ -53,7 +53,7 @@ describe('automatic issue adoption', () => {
       new Date('2026-08-11T13:00:00.000Z'),
     );
 
-    expect(report).toEqual({ adopted: ['NEW-1'], needsContext: [], skipped: ['NEW-2'] });
+    expect(report).toEqual({ adopted: ['NEW-1'], curationBlocked: [], skipped: ['NEW-2'] });
     expect(setLifecycle).toHaveBeenCalledWith('NEW-1', 'ai-curate');
     expect(setCursor).toHaveBeenCalledWith('2026-08-11T13:00:00.000Z');
   });
@@ -71,9 +71,9 @@ describe('automatic issue adoption', () => {
       requestContext,
     });
 
-    expect(report.needsContext).toEqual(['NEW-3']);
+    expect(report.curationBlocked).toEqual(['NEW-3']);
     expect(requestContext).toHaveBeenCalledWith('NEW-3', 'No repository mapping', ['lorebound']);
-    expect(setLifecycle).toHaveBeenCalledWith('NEW-3', 'ai-needs-context');
+    expect(setLifecycle).toHaveBeenCalledWith('NEW-3', 'ai-blocked');
     expect(setCursor).toHaveBeenCalledOnce();
   });
 

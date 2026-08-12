@@ -12,8 +12,6 @@ concurrency:
 linear:
   labels:
     curate: ai-curate
-    curated: ai-curated
-    needs_context: ai-needs-context
     ready: ai-ready
     running: ai-running
     blocked: ai-blocked

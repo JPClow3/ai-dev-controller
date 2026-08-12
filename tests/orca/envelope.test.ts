@@ -5,7 +5,6 @@ import {
   createParentWorktree,
   createWorkerWorktree,
   unwrapWorktree,
-  branchNameFor,
   findWorkerWorktree,
 } from '../../src/orca/worktrees.js';
 import {

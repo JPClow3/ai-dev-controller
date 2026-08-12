@@ -24,7 +24,6 @@ import {
   launchWorker,
   listTerminals,
   classifyWorkerLiveness,
-  readWorkerExit,
   workerScript,
   WORKER_PROMPT_FILE,
   WORKER_SCRIPT_FILE,
@@ -41,7 +40,7 @@ import {
 import { ensureDraftPullRequest, updatePullRequestBody, findPullRequestByBranch } from '../github/pull-requests.js';
 import { readChecks } from '../github/checks.js';
 import { renderPrBody, renderStubPrBody } from '../github/pr-body.js';
-import { readValidationCommands, readSetupCommand, runRequiredValidation } from '../validation/local.js';
+import { readEffectiveSetupCommand, readValidationCommands, runRequiredValidation } from '../validation/local.js';
 import { buildFinalReviewPacket, renderPacket } from '../reviews/packet.js';
 import { toPrComments, type ReviewResult } from '../reviews/review.js';
 import type { RemediationTask } from '../reviews/remediation.js';
@@ -71,6 +70,48 @@ export interface StepsWiring {
 }
 
 const RISK_RANK: Record<Risk, number> = { low: 0, medium: 1, high: 2 };
+
+export interface WorkerCommitMessageInput {
+  issueId: string;
+  projectId: string;
+  taskId: string;
+  taskCategory?: string | undefined;
+  taskSummary: string;
+  ownedPaths: string[];
+  workerSummary: string;
+}
+
+function commitKind(taskCategory?: string): 'feat' | 'fix' | 'test' | 'docs' | 'chore' {
+  const category = taskCategory?.toLowerCase() ?? '';
+  if (category.includes('test')) return 'test';
+  if (category.includes('fix') || category.includes('bug')) return 'fix';
+  if (category.includes('doc')) return 'docs';
+  if (category.includes('feature') || category.includes('implementation')) return 'feat';
+  return 'chore';
+}
+
+function conciseSummary(summary: string, maxLength: number): string {
+  const normalized = summary.replace(/\s+/g, ' ').trim();
+  const lowercased = normalized ? `${normalized[0]!.toLowerCase()}${normalized.slice(1)}` : 'update task';
+  if (lowercased.length <= maxLength) return lowercased;
+  const clipped = lowercased.slice(0, Math.max(1, maxLength - 1));
+  return `${clipped.replace(/\s+\S*$/, '').trim()}…`;
+}
+
+/** Formats a concise subject and retains unverified worker evidence in the body. */
+export function formatWorkerCommitMessage(input: WorkerCommitMessageInput): string {
+  const prefix = `${commitKind(input.taskCategory)}(${input.projectId}): `;
+  const suffix = ` (${input.issueId})`;
+  const subject = `${prefix}${conciseSummary(input.taskSummary, 72 - prefix.length - suffix.length)}${suffix}`;
+  return [
+    subject,
+    '',
+    `Task: ${input.taskId}`,
+    `Owned paths: ${input.ownedPaths.join(', ')}`,
+    '',
+    `Verification: ${input.workerSummary || 'No worker verification summary recorded.'}`,
+  ].join('\n');
+}
 
 /** A task may raise an issue's risk, never lower it. */
 export function effectiveTaskRisk(issueRisk: Risk, taskRisk?: Risk): Risk {
@@ -423,7 +464,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       rmSync(join(controlDir, stale), { force: true });
     }
     writeFileSync(join(controlDir, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
-    const setup = readSetupCommand(contractPath(ctx));
+    const setup = readEffectiveSetupCommand(contractPath(ctx));
     writeFileSync(
       join(controlDir, WORKER_SCRIPT_FILE),
       workerScript(profile, controlDir, {
@@ -477,7 +518,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
    */
   async function commitWorkerChanges(
     ctx: StepContext,
-    task: { id: string; summary: string; owns: string[] },
+    task: { id: string; summary: string; owns: string[]; task_category?: string },
     workerPath: string,
     controlDir: string,
   ): Promise<void> {
@@ -503,17 +544,15 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       return;
     }
 
-    // The worker's own account of what it did, so the commit says something
-    // truer than a template would.
-    const summary = readIfPresent(controlDir, WORKER_RESULT_FILE).split('\n')[0]?.trim() ?? '';
-    const message = [
-      `${ctx.run.issueId}: ${task.summary}`,
-      '',
-      summary || `Task ${task.id}.`,
-      '',
-      `Task: ${task.id}`,
-      `Owned paths: ${task.owns.join(', ')}`,
-    ].join('\n');
+    const message = formatWorkerCommitMessage({
+      issueId: ctx.run.issueId,
+      projectId: ctx.projectId,
+      taskId: task.id,
+      taskCategory: task.task_category,
+      taskSummary: task.summary,
+      ownedPaths: task.owns,
+      workerSummary: readIfPresent(controlDir, WORKER_RESULT_FILE).trim(),
+    });
 
     await run(['commit', '-m', message]);
     log.info(`${ctx.run.issueId}/${task.id}: committed ${staged.split('\n').filter(Boolean).length} owned file(s)`);
@@ -795,7 +834,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       // installed dependencies, so without it every command fails for a
       // reason unrelated to the change. Recording it as a result rather than
       // hiding it means a failed install reads as a failed install.
-      const setup = readSetupCommand(contractPath(ctx));
+      const setup = readEffectiveSetupCommand(contractPath(ctx));
       const commands = [...(setup ? [setup] : []), ...readValidationCommands(contractPath(ctx))];
       const summary = await runRequiredValidation(treePath(ctx), commands);
       // Stored so the PR body reports the run that actually gated the
@@ -953,7 +992,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
           satisfied: explicitStatus.get(c.id) === 'satisfied',
         })),
         implementationNotes: attempts.map((a) => `- ${a.alias}: ${a.role}`).join('\n'),
-        validation: validation.results.map((r) => ({ name: r.name, passed: r.passed })),
+        validation: validation.results.map((r) => ({ name: r.name, passed: r.passed, command: r.command })),
         planner: attempts.find((a) => a.role === 'planner')?.alias ?? 'unknown',
         workers: attempts.filter((a) => a.role === 'worker').map((a) => ({ alias: a.alias, taskSummary: a.taskKey ?? '' })),
         integrationReviewer: attempts.find((a) => a.role === 'integration_reviewer')?.alias ?? null,
@@ -1010,7 +1049,7 @@ export function createSteps(wiring: StepsWiring): OrchestratorDeps {
       repos.recordEscalation(ctx.run.issueId, ctx.run.id, trigger, question);
       if (!writeToLinear) return;
       try {
-        await postBlockerQuestion(ctx.run.issueId, question);
+        await postBlockerQuestion(ctx.run.issueId, question, trigger);
         await setAiLifecycleLabel(ctx.run.issueId, 'ai-blocked');
       } catch (err) {
         // Losing the Linear write must not lose the escalation itself.

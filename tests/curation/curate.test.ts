@@ -60,7 +60,6 @@ describe('rough Linear issue curation', () => {
     expect(report.curated).toEqual(['JP-10']);
     expect(persistCurated).toHaveBeenCalledWith(rough('JP-10'), curated('JP-10'));
     expect(setLifecycle).toHaveBeenCalledWith('JP-10', 'ai-ready');
-    expect(setLifecycle).not.toHaveBeenCalledWith('JP-10', 'ai-curated');
   });
 
   it('asks specific questions instead of inventing missing product behavior', async () => {
@@ -85,7 +84,7 @@ describe('rough Linear issue curation', () => {
       setLifecycle: vi.fn(async () => undefined),
     });
 
-    expect(report.needsContext).toEqual(['JP-11']);
+    expect(report.curationBlocked).toEqual(['JP-11']);
     expect(requestContext).toHaveBeenCalledWith('JP-11', result.needs_context);
     expect(persistCurated).not.toHaveBeenCalled();
   });

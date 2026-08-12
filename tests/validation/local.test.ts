@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runRequiredValidation, readValidationCommands, failureDigest } from '../../src/validation/local.js';
+import {
+  runRequiredValidation,
+  readValidationCommands,
+  readEffectiveSetupCommand,
+  failureDigest,
+} from '../../src/validation/local.js';
 import { summarise } from '../../src/validation/result.js';
 import { deriveProject, renderProjectYaml, detectCiTrigger } from '../../src/knowledge/derive.js';
 import { overlappingOwnership, globsIntersect } from '../../src/git/integration.js';
@@ -106,6 +111,41 @@ validation:
 
   it('returns nothing when the repository has not been bootstrapped', () => {
     expect(readValidationCommands(scratchRepo({}))).toEqual([]);
+  });
+});
+
+describe('readEffectiveSetupCommand', () => {
+  it('uses a deterministic npm install when a package lock is present', () => {
+    expect(readEffectiveSetupCommand(scratchRepo({ 'package-lock.json': '{}' }))).toEqual({
+      name: 'setup',
+      command: 'npm ci',
+      required: true,
+    });
+  });
+
+  it('prefers an explicit setup command over a lockfile inference', () => {
+    expect(readEffectiveSetupCommand(scratchRepo({
+      'package-lock.json': '{}',
+      '.ai-workflow/project.yaml': `validation:
+  setup:
+    command: npm ci --ignore-scripts
+`,
+    }))).toEqual({
+      name: 'setup',
+      command: 'npm ci --ignore-scripts',
+      required: true,
+    });
+  });
+
+  it('uses no setup command without a supported lockfile or declaration', () => {
+    expect(readEffectiveSetupCommand(scratchRepo({ 'requirements.txt': 'requests' }))).toBeNull();
+  });
+
+  it('does not guess a package manager when lockfiles conflict', () => {
+    expect(readEffectiveSetupCommand(scratchRepo({
+      'package-lock.json': '{}',
+      'pnpm-lock.yaml': 'lockfileVersion: 9',
+    }))).toBeNull();
   });
 });
 

@@ -58,14 +58,14 @@ export interface CurateIssuesDeps {
   persistCurated: (issue: CuratorIssue, result: CuratedIssueResult) => Promise<void>;
   requestContext: (identifier: string, context: NeedsContext) => Promise<void>;
   /** A complete contract is promoted directly into the implementation queue. */
-  setLifecycle: (identifier: string, label: 'ai-ready' | 'ai-needs-context') => Promise<void>;
+  setLifecycle: (identifier: string, label: 'ai-ready' | 'ai-blocked') => Promise<void>;
   /** Lets the composition root persist provider cooldowns; `stop` ends this batch. */
   onFailure?: (issue: CuratorIssue, error: unknown) => Promise<'continue' | 'stop' | void> | 'continue' | 'stop' | void;
 }
 
 export interface CurationReport {
   curated: string[];
-  needsContext: string[];
+  curationBlocked: string[];
   failed: Array<{ identifier: string; error: string }>;
 }
 
@@ -93,7 +93,7 @@ export function normalizeCuratedBody(body: string, criteria: CuratedCriterion[])
  * `ai-ready`. One provider failure is isolated so polling continues.
  */
 export async function curateIssues(deps: CurateIssuesDeps): Promise<CurationReport> {
-  const report: CurationReport = { curated: [], needsContext: [], failed: [] };
+  const report: CurationReport = { curated: [], curationBlocked: [], failed: [] };
 
   for (const issue of await deps.fetchIssues()) {
     try {
@@ -105,8 +105,8 @@ export async function curateIssues(deps: CurateIssuesDeps): Promise<CurationRepo
           ...(resolution.candidates ? { candidate_repositories: resolution.candidates } : {}),
         };
         await deps.requestContext(issue.identifier, context);
-        await deps.setLifecycle(issue.identifier, 'ai-needs-context');
-        report.needsContext.push(issue.identifier);
+        await deps.setLifecycle(issue.identifier, 'ai-blocked');
+        report.curationBlocked.push(issue.identifier);
         continue;
       }
 
@@ -118,8 +118,8 @@ export async function curateIssues(deps: CurateIssuesDeps): Promise<CurationRepo
       if (result.verdict === 'needs_context') {
         if (!result.needs_context) throw new Error('needs_context verdict omitted its questions');
         await deps.requestContext(issue.identifier, result.needs_context);
-        await deps.setLifecycle(issue.identifier, 'ai-needs-context');
-        report.needsContext.push(issue.identifier);
+        await deps.setLifecycle(issue.identifier, 'ai-blocked');
+        report.curationBlocked.push(issue.identifier);
         continue;
       }
 

@@ -5,7 +5,7 @@
 ```
 new Linear issue -> automatic ai-curate
                               |
-                           curator  -- insufficient context --> ai-needs-context
+                           curator
                               |
                        automatic ai-ready
                               |
@@ -20,6 +20,25 @@ new Linear issue -> automatic ai-curate
 
 From issue creation through draft PR, the system owns the flow unless it hits a
 genuine blocker. There are no routine approval checkpoints.
+
+Curation gathers the available issue and repository context, then moves the
+issue directly to `ai-ready`. An unresolved external product decision or
+repository ambiguity is a genuine `ai-blocked` interruption.
+
+## What an AI-blocked issue tells you
+
+The `ai-blocked` label marks only the state. Its accompanying Linear comment
+states the durable reason, relevant evidence, the owner (`controller`,
+`repository`, or `you`), the next action, and whether `pnpm cli resume <issue>`
+is appropriate. A label is never meant to force operators to inspect the local
+controller database to find out what happened.
+
+Test, build, CI, and integration failures after setup are normally repaired
+automatically: the controller prepares a fresh Node worktree through explicit
+or recognized lockfile-backed setup, records the failure evidence, and
+dispatches a bounded remediation task to a different worker. A failed setup,
+exhausted budget, unsafe action, or incomplete recovery path becomes
+`ai-blocked`.
 
 ## Interruptions you will NOT get
 
@@ -61,7 +80,6 @@ live in the controller, never in the issue tracker.
 | Internal | Linear |
 | --- | --- |
 | DISCOVERED, CURATING | `ai-curate` |
-| NEEDS_CONTEXT | `ai-needs-context` |
 | WAITING_READY | `ai-ready` |
 | QUEUED, PLANNING, IMPLEMENTING, INTEGRATING, LOCAL_VALIDATION, REMEDIATING | `ai-running` |
 | CI, FINAL_REVIEW, PR_READY | `ai-reviewing` |

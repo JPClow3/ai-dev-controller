@@ -21,7 +21,7 @@ vi.mock('../../src/linear/client.js', () => ({
 }));
 
 const { getIssueContract } = await import('../../src/linear/issues.js');
-const { getExplicitBlockers } = await import('../../src/linear/dependencies.js');
+const { getExplicitBlockers, renderBlockerNotice } = await import('../../src/linear/dependencies.js');
 
 /** The two sides of a single "JP-8 blocks JP-9" relation, as Linear reports them. */
 function linearIssue(identifier: string, sides: { blocks?: string[]; blockedBy?: string[] }) {
@@ -113,5 +113,46 @@ describe('an issue is blocked by what points at it', () => {
     await expect(getExplicitBlockers('JP-9')).resolves.toEqual([
       { issueIdentifier: 'JP-9', blockedByIdentifier: 'JP-8' },
     ]);
+  });
+});
+
+describe('blocker notices tell the operator what to do', () => {
+  it('marks an empty remediation plan as a controller defect, not an issue-author task', () => {
+    const notice = renderBlockerNotice({
+      issueId: 'JP-6',
+      trigger: 'remediation_empty',
+      reason: 'remediation requested but no remediation tasks were recorded',
+    });
+
+    expect(notice).toContain('## AI blocked');
+    expect(notice).toContain('**Why:** remediation requested but no remediation tasks were recorded');
+    expect(notice).toContain('**Owner:** controller');
+    expect(notice).toContain('**Next action:** Repair the controller remediation plan before resuming this issue.');
+    expect(notice).not.toContain('pnpm cli resume JP-6');
+  });
+
+  it('tells an issue author how to resume after answering a missing requirement', () => {
+    const notice = renderBlockerNotice({
+      issueId: 'JP-6',
+      trigger: 'unresolved_requirement',
+      reason: 'The public fallback behavior is undocumented.',
+    });
+
+    expect(notice).toContain('**Owner:** you');
+    expect(notice).toContain('**Next action:** Answer the unresolved product requirement in this issue.');
+    expect(notice).toContain('pnpm cli resume JP-6');
+  });
+
+  it('keeps curation questions actionable when repository context is missing', () => {
+    const notice = renderBlockerNotice({
+      issueId: 'JP-6',
+      trigger: 'curation_needs_context',
+      reason: 'repository is ambiguous',
+      evidence: '- Which repository owns this change?',
+    });
+
+    expect(notice).toContain('**Owner:** you');
+    expect(notice).toContain('**Next action:** Answer the curation questions in this issue.');
+    expect(notice).toContain('- Which repository owns this change?');
   });
 });

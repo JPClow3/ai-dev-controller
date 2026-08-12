@@ -222,6 +222,25 @@ describe('the happy path, one step at a time', () => {
     expect(d.writeProvenanceBody).not.toHaveBeenCalled();
   });
 
+  it('PR_READY waits for revalidation checks that are still pending', async () => {
+    const c = ctx('PR_READY');
+    repos.recordReview(c.run.id, {
+      verdict: 'request_changes', stage: 'final', reviewer: { id: 'luna_low' },
+      findings: [], criteria: [{ id: 'AC-1', status: 'uncertain' }],
+    });
+    const d = deps({
+      readChecks: vi.fn(async () => ({
+        headSha: 'abc', complete: false, allRequiredPassed: false,
+        checks: [{ name: 'test', state: 'PENDING', conclusion: null, required: true }],
+        pending: ['test'], failed: [],
+      })),
+    });
+
+    const result = await advanceRun(c, d);
+    expect(result).toMatchObject({ to: null, action: 'waiting' });
+    expect(repos.pendingRemediation(c.run.id)).toEqual([]);
+  });
+
   it('PR_READY re-runs an approving review that omitted an expected criterion', async () => {
     const c = ctx('PR_READY');
     repos.recordReview(c.run.id, {
@@ -272,21 +291,63 @@ describe('it waits instead of guessing', () => {
 });
 
 describe('failures route to remediation, not forward', () => {
-  it('failed local validation goes to REMEDIATING', async () => {
+  it('blocks for repository setup failure instead of dispatching a code repair worker', async () => {
+    const c = ctx('LOCAL_VALIDATION');
+    const blockForHuman = vi.fn(async () => undefined);
     const d = deps({
-      runValidation: vi.fn(async () => ({ passed: false, failedRequired: ['test'], results: [] })),
+      blockForHuman,
+      runValidation: vi.fn(async () => ({
+        passed: false,
+        failedRequired: ['setup'],
+        results: [{
+          name: 'setup', command: 'npm ci', exitCode: 1, passed: false, required: true,
+          durationMs: 1, stdoutTail: '', stderrTail: 'npm ERR! E401', timedOut: false,
+        }],
+      })),
     });
-    expect((await advanceRun(ctx('LOCAL_VALIDATION'), d)).to).toBe('REMEDIATING');
+
+    expect((await advanceRun(c, d)).to).toBe('BLOCKED_HUMAN');
+    expect(repos.pendingRemediation(c.run.id)).toEqual([]);
+    expect(blockForHuman).toHaveBeenCalledWith(
+      expect.anything(),
+      'setup_failed',
+      expect.stringContaining('npm ci'),
+    );
+  });
+
+  it('failed local validation goes to REMEDIATING', async () => {
+    const c = ctx('LOCAL_VALIDATION');
+    const d = deps({
+      runValidation: vi.fn(async () => ({
+        passed: false,
+        failedRequired: ['test'],
+        results: [{
+          name: 'test', command: 'pnpm test', exitCode: 1, passed: false, required: true,
+          durationMs: 1, stdoutTail: '', stderrTail: 'Expected true to be false', timedOut: false,
+        }],
+      })),
+    });
+    expect((await advanceRun(c, d)).to).toBe('REMEDIATING');
+    expect(repos.pendingRemediation(c.run.id)).toEqual([expect.objectContaining({
+      file: '.',
+      suggestedValidation: 'pnpm test',
+      instruction: expect.stringContaining('Expected true to be false'),
+    })]);
   });
 
   it('failed CI goes to REMEDIATING', async () => {
+    const c = ctx('CI');
     const d = deps({
       readChecks: vi.fn(async () => ({
         headSha: 'a', complete: true, allRequiredPassed: false,
         checks: [], pending: [], failed: ['test'],
       })),
     });
-    expect((await advanceRun(ctx('CI'), d)).to).toBe('REMEDIATING');
+    expect((await advanceRun(c, d)).to).toBe('REMEDIATING');
+    expect(repos.pendingRemediation(c.run.id)).toEqual([expect.objectContaining({
+      file: '.',
+      suggestedValidation: 'Inspect the failed CI check(s): test',
+    })]);
   });
 
   it('holds in CI after requesting one bounded environmental rerun', async () => {
@@ -304,8 +365,12 @@ describe('failures route to remediation, not forward', () => {
   });
 
   it('integration conflicts go to REMEDIATING, resolved in the parent', async () => {
+    const c = ctx('INTEGRATING');
     const d = deps({ integrate: vi.fn(async () => ({ conflicts: ['src/shared.ts'], headSha: null })) });
-    expect((await advanceRun(ctx('INTEGRATING'), d)).to).toBe('REMEDIATING');
+    expect((await advanceRun(c, d)).to).toBe('REMEDIATING');
+    expect(repos.pendingRemediation(c.run.id)).toEqual([expect.objectContaining({
+      file: 'src/shared.ts',
+    })]);
   });
 
   it('relaunches an interrupted worker within budget without leaving IMPLEMENTING', async () => {
@@ -413,6 +478,26 @@ describe('it blocks for a human on real blockers', () => {
     const result = await advanceRun(ctx('REMEDIATING'), d);
     expect(result.to).toBe('BLOCKED_HUMAN');
     expect(d.blockForHuman).toHaveBeenCalled();
+  });
+
+  it('rebuilds a missing remediation plan from failed local validation evidence', async () => {
+    const c = ctx('REMEDIATING');
+    repos.recordValidation(c.run.id, {
+      passed: false,
+      results: [{
+        name: 'test', command: 'pnpm test', exitCode: 1, passed: false, required: true,
+        durationMs: 1, stdoutTail: '', stderrTail: 'failing assertion', timedOut: false,
+      }],
+    });
+    const dispatchRemediation = vi.fn(async () => undefined);
+
+    const result = await advanceRun(c, deps({ dispatchRemediation }));
+
+    expect(result.to).toBe('IMPLEMENTING');
+    expect(dispatchRemediation).toHaveBeenCalledWith(
+      expect.anything(),
+      [expect.objectContaining({ file: '.', suggestedValidation: 'pnpm test' })],
+    );
   });
 });
 

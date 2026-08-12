@@ -9,7 +9,7 @@ The controller owns workflow state, dependency waves, concurrency, routing polic
 ```
 new Linear issue -> controller adds ai-curate
                               |
-                           curator  -- insufficient context --> ai-needs-context
+                           curator
                               |
                       automatic ai-ready
                               |
@@ -23,6 +23,21 @@ new Linear issue -> controller adds ai-curate
 ```
 
 From issue creation through draft PR, the system owns the flow unless it hits a genuine context, dependency, or safety blocker. There are no routine approval checkpoints.
+
+Curation gathers the available issue and repository context, then promotes the
+result straight to `ai-ready`. Only an unresolved external product decision or
+repository ambiguity becomes `ai-blocked`.
+
+### Actionable status and automatic recovery
+
+`ai-blocked` is a short lifecycle signal, not the diagnosis. The controller
+posts a Linear comment before applying it with the reason, evidence, owner,
+next action, and whether the issue can be resumed. Routine test, build, CI, and
+integration failures after setup create bounded remediation work automatically;
+setup failures and work that cannot be safely repaired reach a human blocker.
+Fresh Node worktrees
+use an explicit setup command when present, otherwise only a lockfile-backed
+setup (`npm ci`, `pnpm install --frozen-lockfile`, or `yarn install --immutable`).
 
 ### Dependency waves
 
@@ -179,7 +194,6 @@ prompts/
 | Internal state | Linear label |
 | --- | --- |
 | `DISCOVERED`, `CURATING` | `ai-curate` |
-| `NEEDS_CONTEXT` | `ai-needs-context` |
 | `WAITING_READY` | `ai-ready` |
 | `QUEUED`, `PLANNING`, `IMPLEMENTING`, `INTEGRATING`, `LOCAL_VALIDATION`, `REMEDIATING` | `ai-running` |
 | `CI`, `FINAL_REVIEW`, `PR_READY` | `ai-reviewing` |
@@ -196,8 +210,8 @@ Enforced by the controller; no model can override them.
 - Every issue starts from a freshly fetched base branch.
 - Models return *recommended* transitions. The controller verifies mechanical
   preconditions independently and performs the write.
-- The controller owns `ai-curate` through `ai-pr-open`; a complete curator
-  contract is promoted directly to `ai-ready`.
+- The controller owns `ai-curate` through `ai-pr-open`; curation builds the
+  implementation contract and promotes it directly to `ai-ready`.
 - Never merge, never push to the base branch, never force-push protected
   branches, never run destructive operations against production.
 - Retry budgets are finite. Exhaustion means `BLOCKED_HUMAN`, not another
