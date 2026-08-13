@@ -21,6 +21,7 @@ import {
   workerTerminalTitle,
   workerWorktreeName,
 } from '../../src/workflow/steps.js';
+import { assertSafeWorkerSetup } from '../../src/workflow/step-workers.js';
 
 describe('worker dispatch recovery boundaries', () => {
   it('formats concise factual controller commit messages', () => {
@@ -117,7 +118,7 @@ describe('worker dispatch recovery boundaries', () => {
     expect(git.fastForwardTo).toHaveBeenCalledWith('C:/worker', 'integrated-parent');
   });
 
-  it('removes real tracked and untracked carryover before a retry and preserves evidence', async () => {
+  it('removes real tracked and untracked carryover before a retry and preserves evidence', { timeout: 20_000 }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'ai-dev-retry-'));
     const evidence = join(repo, '..', `${repo.split(/[\\/]/).pop()}.failed.patch`);
     try {
@@ -139,7 +140,7 @@ describe('worker dispatch recovery boundaries', () => {
       expect(readFileSync(evidence, 'utf8')).toContain('src/new.ts');
       expect(readFileSync(join(`${evidence}.files`, 'src', 'new.ts'), 'utf8')).toBe('failed alias file\n');
     } finally {
-      rmSync(repo, { recursive: true, force: true });
+      rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       rmSync(evidence, { force: true });
       rmSync(`${evidence}.files`, { recursive: true, force: true });
     }
@@ -147,6 +148,91 @@ describe('worker dispatch recovery boundaries', () => {
 });
 
 describe('pull request durability', () => {
+  it('screens an unsafe immutable setup command before validation reaches the shell', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'ai-dev-validation-safety-'));
+    const db = openDatabase(':memory:');
+    try {
+      await realGit(repo, ['init']);
+      await realGit(repo, ['config', 'user.email', 'controller@example.invalid']);
+      await realGit(repo, ['config', 'user.name', 'Controller Test']);
+      mkdirSync(join(repo, '.ai-workflow'));
+      writeFileSync(
+        join(repo, '.ai-workflow', 'project.yaml'),
+        [
+          'validation:',
+          '  setup:',
+          '    command: git push --force origin HEAD',
+          '  commands:',
+          '    smoke:',
+          '      command: echo smoke',
+        ].join('\n'),
+      );
+      await realGit(repo, ['add', '.']);
+      await realGit(repo, ['commit', '-m', 'validation contract']);
+      const baseSha = (await realGit(repo, ['rev-parse', 'HEAD'])).trim();
+
+      const repos = createRepositories(db);
+      const config = loadControllerConfig(process.cwd());
+      const project = config.registry.projects.portfolio!;
+      repos.upsertProject({
+        id: 'portfolio', enabled: true,
+        repoPath: repo,
+        githubSlug: project.repository.github,
+        baseBranch: project.repository.baseBranch,
+        linearProject: project.linear.project ?? null,
+        knowledgeStatus: 'unverified', maxAgents: 2, routingProfile: 'default',
+      });
+      repos.upsertIssue({ id: 'JP-78', projectId: 'portfolio', title: 'Safety setup' });
+      const run = repos.claimIssueRun('JP-78', 'portfolio')!;
+      repos.attachRunWorkspace(run.id, { branch: 'ai/JP-78', baseSha, orcaWorktreeId: `repo::${repo}` });
+      const steps = createSteps({
+        config,
+        repos,
+        agents: {} as never,
+        orca: createOrcaClient({ run: async () => ({ stdout: '{}', stderr: '' }) }),
+        github: createGitHub(async () => '[]'),
+        git: createGit(async () => ''),
+        gitRunner: async () => '',
+        routing: {
+          routing: config.routing,
+          scoring: config.scoring,
+          pressure: defaultPressure(config.routing),
+          stats: () => null,
+          random: () => 0.5,
+        },
+        agentNameFor: (alias) => alias,
+        writeToLinear: false,
+      });
+
+      const summary = await steps.runValidation({
+        run: repos.getRun(run.id)!,
+        projectId: 'portfolio',
+        ciTrigger: 'pull_request',
+        risk: 'low',
+        baseBranch: project.repository.baseBranch,
+        branch: 'ai/JP-78',
+        worktreePath: repo,
+      });
+
+      expect(summary.passed).toBe(false);
+      expect(summary.results.find((result) => result.name === 'setup')).toMatchObject({
+        passed: false,
+        safetyViolation: 'force_push_protected_branch',
+      });
+    } finally {
+      db.close();
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an unsafe setup before worker launch', () => {
+    expect(() => assertSafeWorkerSetup(
+      'wrangler deploy --env production',
+      ['production_deployment'],
+    )).toThrow(/Refused unsafe validation command/);
+    expect(() => assertSafeWorkerSetup('npm ci', ['production_deployment'])).not.toThrow();
+  });
+
   it('records an existing draft PR adopted from GitHub', async () => {
     const db = openDatabase(':memory:');
     try {
@@ -201,6 +287,23 @@ describe('pull request durability', () => {
         branch: 'JPClow3/ai-JP-77',
         worktreePath: 'C:/wt',
       });
+
+      const validation = await steps.runValidation({
+        run,
+        projectId: 'portfolio',
+        ciTrigger: 'pull_request',
+        risk: 'low',
+        baseBranch: project.repository.baseBranch,
+        branch: 'JPClow3/ai-JP-77',
+        worktreePath: 'C:/wt',
+      });
+      expect(validation.passed).toBe(false);
+      expect(validation.results[0]).toMatchObject({
+        name: 'setup',
+        required: true,
+        passed: false,
+      });
+      expect(validation.results[0]?.command).toContain('requires a recorded base SHA');
 
       expect(db.raw.prepare('SELECT number, url, draft, head_branch, base_branch FROM pull_requests WHERE run_id = ?')
         .get(run.id)).toEqual({

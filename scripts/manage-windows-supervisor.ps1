@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Stop-ControllerOwnedByRepository([string]$Repository) {
+function Close-ControllerProcess([string]$Repository) {
   $runtimeLock = Join-Path $Repository 'data\.controller-runtime.lock'
   $legacyLock = Join-Path $Repository 'data\controller.lock'
   $lockPath = if (Test-Path -LiteralPath $runtimeLock -PathType Leaf) { $runtimeLock } else { $legacyLock }
@@ -37,13 +37,24 @@ if ($Action -eq 'status') {
     exit 1
   }
   $info = Get-ScheduledTaskInfo -TaskName $TaskName
+  $healthy = $task.State -eq 'Running'
+  $diagnosis = if ($healthy) {
+    'supervisor is running'
+  } elseif ($task.State -eq 'Ready') {
+    'installed but not running; run `pnpm supervisor:install` to restart it'
+  } else {
+    "scheduled task state is $($task.State)"
+  }
   [pscustomobject]@{
     TaskName = $TaskName
     State = $task.State
+    Healthy = $healthy
+    Diagnosis = $diagnosis
     LastRunTime = $info.LastRunTime
     LastTaskResult = $info.LastTaskResult
     NextRunTime = $info.NextRunTime
   } | Format-List
+  if (-not $healthy) { exit 1 }
   exit 0
 }
 
@@ -55,7 +66,7 @@ if ($Action -eq 'uninstall') {
     exit 0
   }
   Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-  Stop-ControllerOwnedByRepository $repository
+  Close-ControllerProcess $repository
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
   Write-Output "uninstalled: $TaskName"
   exit 0
@@ -72,7 +83,7 @@ $pnpm = (Get-Command pnpm.cmd -ErrorAction Stop).Source
 $orca = (Get-Command orca -ErrorAction Stop).Source
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-function Quote-TaskArgument([string]$Value) {
+function ConvertTo-TaskArgument([string]$Value) {
   return '"' + $Value.Replace('"', '\"') + '"'
 }
 
@@ -82,10 +93,10 @@ $arguments = @(
   '-NonInteractive'
   '-ExecutionPolicy Bypass'
   '-WindowStyle Hidden'
-  '-File ' + (Quote-TaskArgument $supervisor)
-  '-RepositoryPath ' + (Quote-TaskArgument $repository)
-  '-PnpmPath ' + (Quote-TaskArgument $pnpm)
-  '-OrcaPath ' + (Quote-TaskArgument $orca)
+  '-File ' + (ConvertTo-TaskArgument $supervisor)
+  '-RepositoryPath ' + (ConvertTo-TaskArgument $repository)
+  '-PnpmPath ' + (ConvertTo-TaskArgument $pnpm)
+  '-OrcaPath ' + (ConvertTo-TaskArgument $orca)
 ) -join ' '
 
 $taskAction = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments
@@ -115,7 +126,7 @@ if ($null -ne $existing -and $existing.State -eq 'Running') {
     Start-Sleep -Milliseconds 250
   }
 }
-Stop-ControllerOwnedByRepository $repository
+Close-ControllerProcess $repository
 Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
 Write-Output "installed-and-started: $TaskName"

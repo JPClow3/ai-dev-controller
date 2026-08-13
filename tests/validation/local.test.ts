@@ -5,10 +5,18 @@ import { join } from 'node:path';
 import {
   runRequiredValidation,
   readValidationCommands,
+  readValidationCommandsAtBaseSha,
+  readValidationContractAtBaseSha,
   readEffectiveSetupCommand,
+  readEffectiveSetupCommandAtBaseSha,
   failureDigest,
 } from '../../src/validation/local.js';
 import { summarise } from '../../src/validation/result.js';
+import {
+  assertSafeValidationCommand,
+  createValidationSafetyPolicy,
+  ValidationSafetyError,
+} from '../../src/validation/safety.js';
 import { deriveProject, renderProjectYaml, detectCiTrigger } from '../../src/knowledge/derive.js';
 import { overlappingOwnership, globsIntersect } from '../../src/git/integration.js';
 import { assertNotBaseBranch, ForbiddenGitOperation } from '../../src/git/repository.js';
@@ -86,6 +94,115 @@ describe('validation is evidence, not opinion', () => {
     expect(digest).toContain('test');
     expect(digest).toContain('expected 3 to be 4');
   });
+
+  it('refuses forbidden commands before invoking the shell', async () => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false }));
+    const summary = await runRequiredValidation(
+      '/repo',
+      [{ name: 'deploy', command: 'npm run deploy', required: true }],
+      { exec, safety: ['production_deployment'] },
+    );
+
+    expect(exec).not.toHaveBeenCalled();
+    expect(summary.passed).toBe(false);
+    expect(summary.failedRequired).toEqual(['deploy']);
+    expect(summary.results[0]?.safetyViolation).toBe('production_deployment');
+    expect(failureDigest(summary)).toMatch(/Safety policy: production_deployment/);
+  });
+
+  it('cannot hide a safety refusal behind an optional command', async () => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false }));
+    const summary = await runRequiredValidation(
+      '/repo',
+      [{ name: 'merge', command: 'git merge origin/main', required: false }],
+      { exec },
+    );
+
+    expect(exec).not.toHaveBeenCalled();
+    expect(summary.passed).toBe(false);
+    expect(summary.failedRequired).toEqual(['merge']);
+  });
+
+  it('keeps ordinary local validation commands executable', async () => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: 'ok', stderr: '', timedOut: false }));
+    const summary = await runRequiredValidation(
+      '/repo',
+      [
+        { name: 'test', command: 'pnpm test', required: true },
+        { name: 'typecheck', command: 'npm run typecheck', required: true },
+        { name: 'python', command: 'python -m pytest', required: true },
+      ],
+      { exec },
+    );
+
+    expect(exec).toHaveBeenCalledTimes(3);
+    expect(summary.passed).toBe(true);
+  });
+
+  it('does not confuse a local test-secret fixture with production rotation', async () => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false }));
+    const summary = await runRequiredValidation(
+      '/repo',
+      [{ name: 'fixtures', command: 'npm run rotate:test-secrets', required: true }],
+      { exec },
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(summary.passed).toBe(true);
+  });
+
+  it('does not classify an AWS SDK test as a cloud deletion', async () => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false }));
+    const summary = await runRequiredValidation(
+      '/repo',
+      [{ name: 'aws-sdk', command: 'node aws-sdk-delete-mock.test.js', required: true }],
+      { exec },
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(summary.passed).toBe(true);
+  });
+
+  it.each([
+    ['production DB migration', 'DATABASE_URL=postgres://prod.example/db pnpm prisma migrate deploy', 'production_database_mutation'],
+    ['remote deletion', 'aws s3 rm s3://bucket --recursive', 'remote_resource_deletion'],
+    ['remote repository deletion', 'gh repo delete acme/app --yes', 'remote_resource_deletion'],
+    ['remote branch deletion', 'git push origin --delete feature/old', 'remote_resource_deletion'],
+    ['secret rotation', 'production_secret rotate --name API_TOKEN', 'production_secret_rotation'],
+    ['force push', 'git push --force origin main', 'force_push_protected_branch'],
+    ['force push with git options', 'git -C repo push -f origin main', 'force_push_protected_branch'],
+    ['force push with shell whitespace indirection', 'git${IFS}push --force origin main', 'force_push_protected_branch'],
+    ['PR merge', 'gh pr merge 42 --squash', 'pr_merge'],
+    ['PR merge with gh options', 'gh --repo acme/app pr merge 42', 'pr_merge'],
+    ['branch protection', 'gh api repos/acme/app/branches/main/protection --method PUT', 'branch_protection_change'],
+    ['cloud destroy', 'terraform destroy -auto-approve', 'destructive_cloud_operation'],
+  ])('blocks %s', (_label, command, operation) => {
+    const policy = createValidationSafetyPolicy([operation]);
+    expect(policy.violation(command)?.operation).toBe(operation);
+    expect(() => assertSafeValidationCommand(command, [operation])).toThrow(ValidationSafetyError);
+  });
+
+  it('fails closed when the configured safety list is empty', async () => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false }));
+    const summary = await runRequiredValidation(
+      '/repo',
+      [{ name: 'test', command: 'pnpm test', required: true }],
+      { exec, safety: [] },
+    );
+    expect(exec).not.toHaveBeenCalled();
+    expect(summary.results[0]?.safetyViolation).toBe('safety_policy_missing');
+    expect(summary.passed).toBe(false);
+  });
+
+  it('does not hand an empty command to the shell', async () => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false }));
+    const summary = await runRequiredValidation(
+      '/repo',
+      [{ name: 'empty', command: '   ', required: false }],
+      { exec },
+    );
+    expect(exec).not.toHaveBeenCalled();
+    expect(summary.results[0]?.safetyViolation).toBe('validation_command_empty');
+    expect(summary.passed).toBe(false);
+  });
 });
 
 describe('readValidationCommands', () => {
@@ -111,6 +228,71 @@ validation:
 
   it('returns nothing when the repository has not been bootstrapped', () => {
     expect(readValidationCommands(scratchRepo({}))).toEqual([]);
+  });
+
+  it('can read an immutable contract from the recorded base SHA', async () => {
+    const repo = scratchRepo({
+      '.ai-workflow/project.yaml': `validation:\n  commands:\n    test:\n      command: npm run attacker-controlled-script\n`,
+    });
+    const readAtBaseSha = vi.fn(async (_repo: string, _sha: string, path: string) => {
+      expect(path).toBe('.ai-workflow/project.yaml');
+      return `validation:\n  commands:\n    test:\n      command: pnpm test\n`;
+    });
+
+    await expect(readValidationCommandsAtBaseSha(repo, '0123456789abcdef0123456789abcdef01234567', { readAtBaseSha })).resolves.toEqual([
+      { name: 'test', command: 'pnpm test', required: true },
+    ]);
+    expect(readAtBaseSha).toHaveBeenCalledTimes(1);
+    expect(readValidationCommands(repo)).toEqual([
+      { name: 'test', command: 'npm run attacker-controlled-script', required: true },
+    ]);
+  });
+
+  it('does not fall back to mutable working-tree commands when the base contract is unavailable', async () => {
+    const repo = scratchRepo({
+      '.ai-workflow/project.yaml': `validation:\n  commands:\n    test:\n      command: npm run attacker-controlled-script\n`,
+    });
+    await expect(readValidationContractAtBaseSha(
+      repo,
+      '0123456789abcdef0123456789abcdef01234567',
+      { readAtBaseSha: async () => null },
+    )).resolves.toEqual({ source: 'none', setup: null, commands: [] });
+  });
+
+  it('rejects a non-SHA base reference rather than reading mutable content', async () => {
+    const readAtBaseSha = vi.fn(async () => 'validation: {}');
+    await expect(readValidationContractAtBaseSha('/repo', 'origin/main', { readAtBaseSha })).resolves.toEqual({
+      source: 'none',
+      setup: null,
+      commands: [],
+    });
+    expect(readAtBaseSha).not.toHaveBeenCalled();
+  });
+
+  it('infers setup from exactly one lockfile in the immutable base', async () => {
+    const readAtBaseSha = vi.fn(async (_repo: string, _sha: string, path: string) => {
+      if (path === '.ai-workflow/project.yaml') return 'validation:\n  commands:\n    test: { command: pnpm test }\n';
+      if (path === 'pnpm-lock.yaml') return 'lockfileVersion: 9';
+      return null;
+    });
+    await expect(readEffectiveSetupCommandAtBaseSha(
+      '/repo',
+      '0123456789abcdef0123456789abcdef01234567',
+      { readAtBaseSha },
+    )).resolves.toEqual({ name: 'setup', command: 'pnpm install --frozen-lockfile', required: true });
+  });
+
+  it('does not infer setup when base lockfiles conflict', async () => {
+    const readAtBaseSha = vi.fn(async (_repo: string, _sha: string, path: string) => {
+      if (path === '.ai-workflow/project.yaml') return 'validation: {}';
+      if (path === 'package-lock.json' || path === 'pnpm-lock.yaml') return '{}';
+      return null;
+    });
+    await expect(readEffectiveSetupCommandAtBaseSha(
+      '/repo',
+      '0123456789abcdef0123456789abcdef01234567',
+      { readAtBaseSha },
+    )).resolves.toBeNull();
   });
 });
 

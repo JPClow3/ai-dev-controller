@@ -41,7 +41,7 @@ function Test-OrcaRuntime {
   }
 }
 
-function Ensure-OrcaRuntime {
+function Invoke-OrcaRuntimeRecovery {
   if (Test-OrcaRuntime) {
     return
   }
@@ -87,7 +87,7 @@ try {
   Add-Content -LiteralPath $supervisorLog -Value "$(Get-Date -Format o) supervisor started pid=$PID repository=$repository"
 
   while ($true) {
-    Ensure-OrcaRuntime
+    Invoke-OrcaRuntimeRecovery
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $controllerStdout = Join-Path $dataDirectory "controller-supervised-$stamp.stdout.log"
     $controllerStderr = Join-Path $dataDirectory "controller-supervised-$stamp.stderr.log"
@@ -106,7 +106,7 @@ try {
         -PassThru
       Add-Content -LiteralPath $supervisorLog -Value "$(Get-Date -Format o) started controller pid=$($child.Id)"
       while (-not $child.WaitForExit($OrcaCheckSeconds * 1000)) {
-        Ensure-OrcaRuntime
+        Invoke-OrcaRuntimeRecovery
       }
       $exitCode = $child.ExitCode
     }

@@ -1,4 +1,8 @@
-import type { EscalationConfig, EscalationAction } from '../config/escalation-schema.js';
+import {
+  remediationBudgetExhausted,
+  type EscalationConfig,
+  type EscalationAction,
+} from '../config/escalation-schema.js';
 import type { RoutingConfig } from '../config/routing-schema.js';
 import { selectModel, type SelectorDeps } from './selector.js';
 import type { EscalationInput, HumanBlock, RoutingDecision } from './types.js';
@@ -73,7 +77,10 @@ export function nextEscalation(
 function budgetExhausted(input: EscalationInput, escalation: EscalationConfig): boolean {
   return (
     input.budget.workerEscalations >= escalation.limits.workerEscalations ||
-    input.budget.reviewRemediationCycles > escalation.limits.reviewRemediationCycles
+    remediationBudgetExhausted(
+      input.budget.reviewRemediationCycles,
+      escalation.limits.reviewRemediationCycles,
+    )
   );
 }
 

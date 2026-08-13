@@ -2,6 +2,7 @@
   "name": "ai-dev-controller",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@11.9.0",
   "type": "module",
   "description": "Deterministic controller that turns new Linear issues into dependency-aware Orca worktrees and draft GitHub PRs",
   "engines": {
@@ -11,10 +12,13 @@
     "ai-dev": "./dist/cli/main.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "prebuild": "pnpm clean",
+    "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/index.ts",
     "cli": "tsx src/cli/main.ts",
     "test": "vitest run",
+    "test:ci": "vitest run --reporter=default",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/state/migrations.ts",
@@ -23,24 +27,24 @@
     "supervisor:uninstall": "pwsh -NoProfile -File scripts/manage-windows-supervisor.ps1 uninstall"
   },
   "dependencies": {
-    "@linear/sdk": "^39.0.0",
-    "@octokit/rest": "^21.1.1",
+    "@linear/sdk": "^89.0.0",
+    "@octokit/rest": "^22.0.1",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "better-sqlite3": "^13.0.3",
-    "commander": "^13.1.0",
-    "dotenv": "^16.4.7",
-    "execa": "^9.5.2",
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "execa": "^10.0.1",
     "picocolors": "^1.1.1",
     "simple-git": "^3.27.0",
     "yaml": "^2.7.0",
-    "zod": "^3.24.2"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.0.0",
-    "tsx": "^4.19.3",
-    "typescript": "^5.7.3",
-    "vitest": "^3.0.7"
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }

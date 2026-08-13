@@ -85,6 +85,22 @@ export const projectRegistrySchema = z
         });
       }
     }
+
+    const defaultsByLinearProject = new Map<string, string[]>();
+    for (const [projectId, project] of Object.entries(cfg.projects)) {
+      if (!project.linear.project || !project.linear.isDefault) continue;
+      const defaults = defaultsByLinearProject.get(project.linear.project) ?? [];
+      defaults.push(projectId);
+      defaultsByLinearProject.set(project.linear.project, defaults);
+    }
+    for (const [linearProject, defaults] of defaultsByLinearProject) {
+      if (defaults.length <= 1) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['projects'],
+        message: `Linear project "${linearProject}" has multiple default repositories: ${defaults.join(', ')}`,
+      });
+    }
   });
 
 export type ProjectRegistry = z.infer<typeof projectRegistrySchema>;

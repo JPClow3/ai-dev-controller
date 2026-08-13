@@ -1,5 +1,9 @@
 # Windows Bootstrap and Local Registry Implementation Plan
 
+> Historical implementation plan. The current bootstrap contract is in
+> `docs/windows-notebook-setup.md`: Corepack activates the exact pnpm release
+> declared by `package.json`, not `pnpm@latest`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a Windows bootstrapper that installs and validates controller prerequisites, while allowing each device to override only repository paths.
@@ -96,7 +100,7 @@ Document the three supported commands: audit only, `-Install -RepositoryRoot C:\
 
 - [ ] **Step 2: Implement prerequisite audit and `winget` install**
 
-Implement `Write-CheckResult`, `Find-Command`, `Test-NodeVersion`, and `Ensure-WingetPackage`. The latter only executes in install mode using `winget install --id <id> --exact --accept-package-agreements --accept-source-agreements`. Install Node via `OpenJS.NodeJS.LTS`, Git via `Git.Git`, GitHub CLI via `GitHub.cli`, Codex via `OpenAI.Codex`, and Orca only after `winget search --id <id> --exact` confirms an available package. Enable pnpm via `corepack enable` and `corepack prepare pnpm@latest --activate` after Node is available.
+Implement `Write-CheckResult`, `Find-Command`, `Test-NodeVersion`, and `Ensure-WingetPackage`. The latter only executes in install mode using `winget install --id <id> --exact --accept-package-agreements --accept-source-agreements`. Install Node via `OpenJS.NodeJS.LTS`, Git via `Git.Git`, GitHub CLI via `GitHub.cli`, Codex via `OpenAI.Codex`, and Orca only after `winget search --id <id> --exact` confirms an available package. Enable Corepack and activate the exact pnpm version declared by `package.json` after Node is available.
 
 - [ ] **Step 3: Implement safe local provisioning**
 

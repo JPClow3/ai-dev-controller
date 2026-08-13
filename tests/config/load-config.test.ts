@@ -49,6 +49,23 @@ describe('loadControllerConfig', () => {
     expect(config.global.safety.forbiddenOperations).toContain('pr_merge');
   });
 
+  it('applies non-empty operator environment overrides for Orca and the database', () => {
+    const config = loadControllerConfig(ROOT, {
+      env: {
+        ORCA_BIN: 'C:/Tools/orca.exe',
+        AI_DEV_DB: 'C:/Controller/controller.test.db',
+      },
+    });
+    expect(config.global.orca.bin).toBe('C:/Tools/orca.exe');
+    expect(config.global.paths.database).toBe('C:/Controller/controller.test.db');
+  });
+
+  it('ignores blank operator overrides instead of producing invalid config', () => {
+    const config = loadControllerConfig(ROOT, { env: { ORCA_BIN: '  ', AI_DEV_DB: '' } });
+    expect(config.global.orca.bin).toBe('orca');
+    expect(config.global.paths.database).toBe('./data/controller.db');
+  });
+
   it('exposes the approved promotion policy per risk tier', () => {
     const { promotion } = loadControllerConfig(ROOT).scoring;
     expect(promotion.lowRisk.automatic).toBe(true);
@@ -163,7 +180,7 @@ wall_clock:
       .replace('first_pass_ci: 0.25', 'first_pass_ci: 0.70');
     writeFileSync(path, scoring);
 
-    expect(() => loadControllerConfig(dir)).toThrow(/greater than or equal to 0/);
+    expect(() => loadControllerConfig(dir)).toThrow(/expected number to be >=0|greater than or equal to 0/);
   });
 
   it('rejects a routing role whose champion is not a declared alias', () => {

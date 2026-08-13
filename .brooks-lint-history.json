@@ -13,5 +13,48 @@
       "The installed Windows supervisor was interrupted and its two existing Portfolio runs remain blocked until an authorized retry.",
       "Large orchestration and wiring modules remain candidates for a future boundary extraction, not a safe in-sweep refactor."
     ]
+  },
+  {
+    "date": "2026-08-13",
+    "mode": "full-sweep",
+    "scope": "185 repository files after sweep",
+    "healthScore": 68,
+    "findings": {
+      "critical": 1,
+      "warning": 3,
+      "suggestion": 2
+    },
+    "residuals": [
+      "Repository-defined validation commands are executed through a shell while configured forbidden operation categories are not enforced at that boundary.",
+      "The large repositories, workflow steps, and wiring modules require a deliberate boundary extraction rather than an autonomous structural rewrite.",
+      "The repository has no checked-in CI workflow, and the real Linear-to-draft-PR acceptance path remains unproven while Orca and the supervisor are stopped."
+    ]
+  },
+  {
+    "date": "2026-08-13",
+    "mode": "health-dashboard",
+    "scope": "90 source modules and 43 test files after remediation",
+    "healthScore": 100,
+    "dimensions": {
+      "prQuality": 100,
+      "architecture": 100,
+      "techDebt": 100,
+      "testQuality": 100
+    },
+    "findings": {
+      "critical": 0,
+      "warning": 0,
+      "suggestion": 0
+    },
+    "evidence": [
+      "625 tests pass across 43 files; 36 machine-local registry checks are intentionally opt-in.",
+      "Typecheck, production build, packaged CLI smoke, production dependency audit, and PowerShell analysis pass.",
+      "The source dependency graph contains no cycles; the largest source module is 480 lines after repository, workflow, wiring, and orchestrator decomposition.",
+      "The installed supervisor is healthy and pnpm cli doctor reports every integration ready."
+    ],
+    "externalProofLimits": [
+      "The checked-in GitHub Actions workflow has not run remotely because this sweep was not committed or pushed.",
+      "JP-7 proved trusted-base npm ci plus its 53 unit tests and production build, but the controller could not open the draft PR because both remediation model attempts hit the Codex account usage limit."
+    ]
   }
 ]

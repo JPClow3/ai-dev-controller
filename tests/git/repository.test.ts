@@ -16,6 +16,10 @@ function fakeGit(handler: (args: string[]) => string | Promise<string>) {
   return { calls, git: createGit(runner), runner };
 }
 
+function missingRefError(): Error & { exitCode: number } {
+  return Object.assign(new Error('unknown revision'), { exitCode: 1 });
+}
+
 describe('patch presence', () => {
   it('detects whether a worker patch is already present on the parent', async () => {
     const { calls, git } = fakeGit((args) => args[0] === 'cherry' ? '- abc123' : '');
@@ -133,12 +137,21 @@ describe('commit and diff parsing', () => {
     const tried: string[] = [];
     const runner = vi.fn(async (_cwd: string, args: string[]) => {
       tried.push(args.join(' '));
-      throw new Error('unknown revision');
+      throw missingRefError();
     });
     const git = createGit(runner);
     expect(await git.branchExists('/repo', 'ai/x')).toBe(false);
     expect(tried.some((t) => t.includes('refs/heads/ai/x'))).toBe(true);
     expect(tried.some((t) => t.includes('refs/remotes/origin/ai/x'))).toBe(true);
+  });
+
+  it('fails closed when branch lookup itself is unavailable', async () => {
+    const git = createGit(vi.fn(async () => {
+      throw new Error('git executable unavailable');
+    }));
+
+    await expect(git.branchExists('/repo', 'ai/x')).rejects.toThrow(/unavailable/);
+    await expect(git.remoteBranchExists('/repo', 'ai/x')).rejects.toThrow(/unavailable/);
   });
 });
 

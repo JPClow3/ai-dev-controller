@@ -24,6 +24,11 @@ export const ESCALATION_ACTIONS = [
 ] as const;
 export type EscalationAction = (typeof ESCALATION_ACTIONS)[number];
 
+/** A configured cycle count is a hard ceiling, not one more retry. */
+export function remediationBudgetExhausted(cyclesUsed: number, limit: number): boolean {
+  return cyclesUsed >= limit;
+}
+
 export const escalationConfigSchema = z
   .object({
     limits: z
@@ -40,7 +45,7 @@ export const escalationConfigSchema = z
         solAdjudications: l.sol_adjudications,
       })),
     failure_routes: z.record(z.enum(FAILURE_CLASSES), z.array(z.enum(ESCALATION_ACTIONS)).min(1)),
-    forbidden: z.record(z.enum(FAILURE_CLASSES), z.array(z.string())).default({}),
+    forbidden: z.partialRecord(z.enum(FAILURE_CLASSES), z.array(z.string())).default({}),
     cross_family_preference: z.record(z.string(), z.array(z.string())),
     review_remediation: z
       .object({

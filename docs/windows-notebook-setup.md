@@ -27,7 +27,8 @@ To additionally register the optional current-user Windows supervisor:
 
 The installer uses `winget` only when `-Install` is supplied. It can install
 Node.js LTS, Git, GitHub CLI, Codex CLI, and Orca when Orca is available from
-the configured package source. pnpm is enabled through Corepack.
+the configured package source. It enables Corepack and activates the exact
+`pnpm` version declared in `package.json`; it never substitutes `pnpm@latest`.
 
 ## Manual actions
 
@@ -46,6 +47,17 @@ identity already has `repo` and `workflow` scopes.
 If a fresh Node installation is not visible to the current terminal, open a
 new PowerShell window and rerun the same command. The bootstrapper stops with
 that instruction instead of proceeding without a supported Node version.
+
+After a successful install, confirm the live dependencies before enabling
+unattended work:
+
+```powershell
+pnpm cli doctor
+pnpm supervisor:status
+```
+
+`doctor` contacts configured services and performs a real Codex availability
+probe. A green binary lookup alone is not proof that the account can run work.
 
 ## Device-specific repository paths
 
@@ -90,3 +102,9 @@ Use these commands to inspect or remove the optional supervisor:
 pnpm supervisor:status
 pnpm supervisor:uninstall
 ```
+
+The supervisor is a limited, current-user Scheduled Task. It starts at logon,
+enforces a single controller process, restarts the controller after an
+unexpected exit, and checks the Orca desktop runtime every 30 seconds. It does
+not elevate or merge pull requests. Repository changes remain the normal,
+bounded responsibility of the controller workflow it supervises.

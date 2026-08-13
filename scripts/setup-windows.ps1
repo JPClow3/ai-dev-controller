@@ -28,6 +28,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:Failures = 0
 $ControllerRoot = Split-Path -Parent $PSScriptRoot
+$packageManager = (Get-Content -Raw -LiteralPath (Join-Path $ControllerRoot 'package.json') | ConvertFrom-Json).packageManager
+if ($packageManager -notmatch '^pnpm@\d+\.\d+\.\d+$') {
+  throw "package.json must pin packageManager to an exact pnpm version; got '$packageManager'"
+}
 $RequiredPackages = @(
   @{ Name = 'Node.js LTS'; Command = 'node'; Id = 'OpenJS.NodeJS.LTS' },
   @{ Name = 'Git'; Command = 'git'; Id = 'Git.Git' },
@@ -44,12 +48,11 @@ function Write-CheckResult {
   )
 
   $label = if ($Passed) { 'PASS' } else { 'FAIL' }
-  $color = if ($Passed) { 'Green' } else { 'Red' }
-  Write-Host ("{0,-4} {1,-22} {2}" -f $label, $Name, $Detail) -ForegroundColor $color
+  Write-Information ("{0,-4} {1,-22} {2}" -f $label, $Name, $Detail) -InformationAction Continue
   if (-not $Passed) { $script:Failures++ }
 }
 
-function Find-Command {
+function Get-ExternalCommand {
   param([string]$Name)
 
   return Get-Command $Name -ErrorAction SilentlyContinue |
@@ -58,7 +61,7 @@ function Find-Command {
 }
 
 function Test-NodeVersion {
-  $node = Find-Command 'node'
+  $node = Get-ExternalCommand 'node'
   if ($null -eq $node) {
     return @{ Available = $false; Detail = 'node is not on PATH' }
   }
@@ -75,7 +78,7 @@ function Test-NodeVersion {
   }
 }
 
-function Refresh-ProcessPath {
+function Sync-ProcessPath {
   $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   $allPaths = @($env:Path, $machinePath, $userPath) |
@@ -86,7 +89,7 @@ function Refresh-ProcessPath {
   $env:Path = $allPaths -join ';'
 }
 
-function Ensure-WingetPackage {
+function Install-WingetPackageIfNeeded {
   param(
     [string]$Name,
     [string]$Command,
@@ -95,7 +98,7 @@ function Ensure-WingetPackage {
     [int]$MinimumNodeMajor = 0
   )
 
-  $existing = Find-Command $Command
+  $existing = Get-ExternalCommand $Command
   $nodeIsSupported = $true
   if ($MinimumNodeMajor -gt 0 -and $null -ne $existing) {
     $nodeIsSupported = (Test-NodeVersion).Available
@@ -114,7 +117,7 @@ function Ensure-WingetPackage {
     return $false
   }
 
-  $winget = Find-Command 'winget'
+  $winget = Get-ExternalCommand 'winget'
   if ($null -eq $winget) {
     Write-CheckResult $Name $false 'missing and winget is unavailable'
     return $false
@@ -128,14 +131,14 @@ function Ensure-WingetPackage {
     }
   }
 
-  Write-Host "Installing $Name with winget ($Id)..."
+  Write-Information "Installing $Name with winget ($Id)..." -InformationAction Continue
   & $winget.Source install --id $Id --exact --accept-package-agreements --accept-source-agreements | Out-Host
   if ($LASTEXITCODE -ne 0) {
     Write-CheckResult $Name $false "winget install failed for $Id"
     return $false
   }
-  Refresh-ProcessPath
-  $installed = Find-Command $Command
+  Sync-ProcessPath
+  $installed = Get-ExternalCommand $Command
   if ($null -eq $installed) {
     Write-CheckResult $Name $false "winget installed $Id, but it is unavailable in this process; open a new terminal and rerun this command"
     return $false
@@ -157,7 +160,7 @@ function Test-EnvKey {
   return [bool](Select-String -LiteralPath $envFile -Pattern ("^\s*{0}\s*=\s*[^\s#]" -f [regex]::Escape($Key)) -Quiet)
 }
 
-function Get-RegistryPaths {
+function Get-RegistryPathMap {
   param([string]$RegistryPath)
 
   $paths = @{}
@@ -175,18 +178,18 @@ function Get-RegistryPaths {
 }
 
 function Write-LocalRegistry {
-  param([string]$Root)
+  param([string]$Root, [switch]$Overwrite)
 
   $registryPath = Join-Path $ControllerRoot 'projects\registry.yaml'
   $localPath = Join-Path $ControllerRoot 'projects\registry.local.yaml'
-  if (Test-Path -LiteralPath $localPath -PathType Leaf -and -not $Force) {
+  if (Test-Path -LiteralPath $localPath -PathType Leaf -and -not $Overwrite) {
     Write-CheckResult 'local registry' $false 'already exists; pass -Force to replace it'
     return
   }
 
   $sourceRoot = 'H:/Code/'
   $entries = [System.Collections.Generic.List[string]]::new()
-  foreach ($project in (Get-RegistryPaths $registryPath).GetEnumerator() | Sort-Object Key) {
+  foreach ($project in (Get-RegistryPathMap $registryPath).GetEnumerator() | Sort-Object Key) {
     $sourcePath = ($project.Value -replace '\\', '/')
     if (-not $sourcePath.StartsWith($sourceRoot, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
     $suffix = $sourcePath.Substring($sourceRoot.Length).Replace('/', [IO.Path]::DirectorySeparatorChar)
@@ -209,7 +212,7 @@ function Write-LocalRegistry {
 function Invoke-ControllerCheck {
   param([string]$Name, [string[]]$Arguments)
 
-  $pnpm = Find-Command 'pnpm'
+  $pnpm = Get-ExternalCommand 'pnpm'
   if ($null -eq $pnpm) {
     Write-CheckResult $Name $false 'pnpm is not on PATH'
     return $false
@@ -233,40 +236,42 @@ if ($InstallSupervisor -and -not $Install) {
   Write-CheckResult 'InstallSupervisor' $false 'requires -Install'
 }
 
-Write-Host "Controller root: $ControllerRoot"
+Write-Information "Controller root: $ControllerRoot" -InformationAction Continue
 $modeText = if ($Install) { 'Mode: install and audit' } else { 'Mode: audit only (no changes)' }
-Write-Host $modeText
+Write-Information $modeText -InformationAction Continue
 
 foreach ($package in $RequiredPackages) {
   $minimumNodeMajor = if ($package.Command -eq 'node') { 24 } else { 0 }
-  [void](Ensure-WingetPackage -Name $package.Name -Command $package.Command -Id $package.Id -MinimumNodeMajor $minimumNodeMajor)
+  [void](Install-WingetPackageIfNeeded -Name $package.Name -Command $package.Command -Id $package.Id -MinimumNodeMajor $minimumNodeMajor)
 }
 $nodeVersion = Test-NodeVersion
 Write-CheckResult 'Node.js version' $nodeVersion.Available $nodeVersion.Detail
 
-if ($null -eq (Find-Command 'orca')) {
-  [void](Ensure-WingetPackage -Name 'Orca CLI' -Command 'orca' -Id $OrcaWingetId -RequireSearch)
+if ($null -eq (Get-ExternalCommand 'orca')) {
+  [void](Install-WingetPackageIfNeeded -Name 'Orca CLI' -Command 'orca' -Id $OrcaWingetId -RequireSearch)
 } else {
   Write-CheckResult 'Orca CLI' $true 'available on PATH'
 }
 
 if ($nodeVersion.Available) {
-  $corepack = Find-Command 'corepack'
+  $corepack = Get-ExternalCommand 'corepack'
   if ($Install -and $null -ne $corepack) {
     & $corepack.Source enable | Out-Host
     $corepackEnable = $LASTEXITCODE -eq 0
     if ($corepackEnable) {
-      & $corepack.Source prepare pnpm@latest --activate | Out-Host
+      # Keep workstation bootstrap on the same pnpm release as package.json
+      # and CI; "latest" makes a frozen lockfile gate depend on install day.
+      & $corepack.Source prepare $packageManager --activate | Out-Host
       $corepackEnable = $LASTEXITCODE -eq 0
     }
-    $corepackDetail = if ($corepackEnable) { 'enabled pnpm@latest' } else { 'failed to activate pnpm' }
+    $corepackDetail = if ($corepackEnable) { "enabled $packageManager" } else { 'failed to activate pnpm' }
     Write-CheckResult 'Corepack pnpm' $corepackEnable $corepackDetail
   } elseif ($null -eq $corepack) {
     Write-CheckResult 'Corepack' $false 'missing; reinstall Node.js LTS'
   }
 }
 
-$pnpm = Find-Command 'pnpm'
+$pnpm = Get-ExternalCommand 'pnpm'
 $pnpmDetail = if ($null -ne $pnpm) { $pnpm.Source } else { 'missing; use -Install to activate it through Corepack' }
 Write-CheckResult 'pnpm' ($null -ne $pnpm) $pnpmDetail
 
@@ -280,10 +285,10 @@ if ($Install) {
     Write-CheckResult '.env' $true 'existing file preserved'
   }
   if ($RepositoryRoot) {
-    Write-LocalRegistry ([IO.Path]::GetFullPath($RepositoryRoot))
+    Write-LocalRegistry ([IO.Path]::GetFullPath($RepositoryRoot)) -Overwrite:$Force
   }
 
-  if ($nodeVersion.Available -and $null -ne (Find-Command 'pnpm')) {
+  if ($nodeVersion.Available -and $null -ne (Get-ExternalCommand 'pnpm')) {
     [void](Invoke-ControllerCheck 'pnpm install' @('install'))
     [void](Invoke-ControllerCheck 'pnpm cli migrate' @('cli', 'migrate'))
   } else {
@@ -294,7 +299,7 @@ if ($Install) {
 
 Write-CheckResult 'LINEAR_API_KEY' (Test-EnvKey 'LINEAR_API_KEY') 'required; set it in .env or the environment'
 
-$gh = Find-Command 'gh'
+$gh = Get-ExternalCommand 'gh'
 if ($null -eq $gh) {
   Write-CheckResult 'GitHub login' $false 'gh is missing; run gh auth login after installation'
 } else {
@@ -302,7 +307,7 @@ if ($null -eq $gh) {
   Write-CheckResult 'GitHub login' ($LASTEXITCODE -eq 0) 'run gh auth login if this check fails'
 }
 
-$codex = Find-Command 'codex'
+$codex = Get-ExternalCommand 'codex'
 if ($null -eq $codex) {
   Write-CheckResult 'Codex login' $false 'codex is missing; run codex login after installation'
 } else {
@@ -310,10 +315,10 @@ if ($null -eq $codex) {
   Write-CheckResult 'Codex login' ($LASTEXITCODE -eq 0) 'run codex login if this check fails'
 }
 
-if ($nodeVersion.Available -and $null -ne (Find-Command 'pnpm')) {
+if ($nodeVersion.Available -and $null -ne (Get-ExternalCommand 'pnpm')) {
   [void](Invoke-ControllerCheck 'pnpm cli config' @('cli', 'config'))
   [void](Invoke-ControllerCheck 'pnpm cli doctor' @('cli', 'doctor'))
-} elseif ($null -ne (Find-Command 'pnpm')) {
+} elseif ($null -ne (Get-ExternalCommand 'pnpm')) {
   Write-CheckResult 'pnpm cli config' $false 'requires Node.js >= v24'
   Write-CheckResult 'pnpm cli doctor' $false 'requires Node.js >= v24'
 }
@@ -328,7 +333,7 @@ if ($InstallSupervisor) {
 }
 
 if ($script:Failures -gt 0) {
-  Write-Host "Readiness audit failed with $script:Failures finding(s)." -ForegroundColor Red
+  Write-Information "Readiness audit failed with $script:Failures finding(s)." -InformationAction Continue
   exit 1
 }
-Write-Host 'Readiness audit passed.' -ForegroundColor Green
+Write-Information 'Readiness audit passed.' -InformationAction Continue

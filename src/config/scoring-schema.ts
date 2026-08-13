@@ -11,14 +11,15 @@ const weightsSchema = z
     resource_cost: z.number().min(0).max(1),
     wall_clock: z.number().min(0).max(1),
   })
-  .refine(
-    (w) => Math.abs(Object.values(w).reduce((a, b) => a + b, 0) - 1) <= 0.001,
-    (w) => ({
-      message: `scoring weights must sum to 1.0 (got ${Object.values(w)
-        .reduce((a, b) => a + b, 0)
-        .toFixed(4)})`,
-    }),
-  )
+  .superRefine((w, ctx) => {
+    const total = Object.values(w).reduce((sum, value) => sum + value, 0);
+    if (Math.abs(total - 1) > 0.001) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `scoring weights must sum to 1.0 (got ${total.toFixed(4)})`,
+      });
+    }
+  })
   .transform((w) => ({
     acceptanceCoverage: w.acceptance_coverage,
     firstPassCi: w.first_pass_ci,

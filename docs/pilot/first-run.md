@@ -142,16 +142,18 @@ validation:
     command: npm ci
 ```
 
-## Standing gap: the knowledge bootstrap has not merged anywhere
+## Historical knowledge-bootstrap gap
 
 `.ai-workflow/` exists as an untracked directory in all nine registered
 repositories and is committed in none of them. Until each repository's
 bootstrap pull request merges, its validation contract does not travel with
 the branch, and a run on an old base is judged by today's rules.
 
-The controller now falls back to the registry clone's working copy and warns
-every time it does, so the gap is visible rather than silent. The durable fix
-is `ai-dev onboard <path>` per repository, and merging the resulting PR.
+At the time, the controller fell back to the registry clone's working copy and
+warned every time it did. That fallback is no longer part of the current
+contract: when a run records a base SHA, validation is read only from that
+commit and a missing contract fails closed. The durable fix remains
+`ai-dev onboard <path>` per repository, followed by merging the generated PR.
 
 ## Limitation: cross-family review is impossible in a Codex-only portfolio
 
@@ -275,3 +277,18 @@ pull requests. Final acceptance remains open only because JP-9's independent
 model review cannot execute before the Codex provider restores allowance (or
 the account receives additional credits); the controller has no authority to
 merge either draft.
+
+## 2026-08-13 hardening verification
+
+The controller sweep added a second bounded live check using Portfolio issue
+JP-7. Its previous local validation failures were caused by a fresh worktree
+without dependencies, not by its implementation. The resumed remediation
+worker read the base-commit contract, inferred `npm ci` from its single trusted
+`package-lock.json`, and completed setup before Codex started.
+
+The worker then stopped because the account-wide Codex usage limit was reached.
+The controller recorded the exhausted attempts and moved the run to
+`BLOCKED_HUMAN` rather than repeating work indefinitely. An independent check
+in that prepared worktree passed all 53 unit tests and the Astro production
+build. This proves the immutable lockfile-backed setup path and the original
+Portfolio validation contract; it does not claim that JP-7 opened a draft PR.

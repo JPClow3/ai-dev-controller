@@ -1,60 +1,44 @@
-# v1 scope
+# v1 scope and module map
 
-Ambitious but bounded. Each item maps to a module in `src/`.
+This is the current v1 surface. The older sequencing rationale remains in
+`docs/implementation-plan.md`; it is not the operational source of truth.
 
 ## In scope
 
-| # | Deliverable | Module |
-| --- | --- | --- |
-| 1 | Central project registry | `src/config/registry.ts` |
-| 2 | SQLite durable controller state | `src/state/db.ts`, `migrations/` |
-| 3 | Repository onboarding + knowledge-bootstrap PR | `src/knowledge/bootstrap.ts` |
-| 4 | Linear curator | `prompts/curator.md`, `src/curation/`, `src/linear/` |
-| 5 | `ai-ready` detection | `src/scheduler/loop.ts` |
-| 6 | Repository resolution | `src/config/registry.ts` |
-| 7 | Explicit `blockedBy` DAG processing | `src/scheduler/dag.ts` |
-| 8 | Dependency-wave scheduler | `src/scheduler/dag.ts` |
-| 9 | 4 issue / 3 worker / 7 global concurrency | `src/scheduler/capacity.ts` |
-| 10 | Orca worktree creation | `src/orca/client.ts` |
-| 11 | Internal task decomposition | `prompts/planner.md` |
-| 12 | Model routing aliases | `config/routing.yaml`, `src/routing/router.ts` |
-| 13 | Luna / Terra / Sol via Codex | `src/orca/client.ts` |
-| 14 | GLM / Kimi / DeepSeek via Ollama Cloud | `src/orca/client.ts` |
-| 15 | Policy-bounded escalation | `config/escalation.yaml`, `src/routing/router.ts` |
-| 16 | Local validation | `src/orca/client.ts` |
-| 17 | GitHub CI synchronisation | `src/github/client.ts` |
-| 18 | Cross-family final review | `src/routing/router.ts` |
-| 19 | Draft PR generation | `src/github/pr-body.ts` |
-| 20 | Run recovery after restart | `src/state/recovery.ts` |
-| 21 | Composite model scoring | `src/scoring/composite.ts` |
-| 22 | Champion-challenger experimentation | `src/scoring/promotion.ts` |
-| 23 | Low-risk automatic promotion | `src/scoring/promotion.ts` |
-| 24 | Medium-risk promotion recommendation | `src/scoring/promotion.ts` |
-| 25 | High-risk routing locked | `config/routing.yaml` |
-| 26 | Minimal debugging CLI | `cli/index.ts` |
+| Deliverable | Current implementation |
+| --- | --- |
+| Shared project registry and device-local path overlay | `src/config/{load-config,registry-schema}.ts`, `projects/registry*.yaml` |
+| Durable SQLite state and run claims | `src/state/{db,lock,migrations,repositories}.ts` and `src/state/repositories/` |
+| Repository knowledge bootstrap PR | `src/knowledge/{bootstrap,bootstrap-pr,derive,discovery,manifest}.ts` |
+| Linear curation, lifecycle labels, and dependencies | `src/curation/`, `src/linear/` |
+| Dependency waves, capacity, and priority | `src/scheduler/{dag,capacity,priority}.ts` |
+| Orca parent/child worktrees and terminal observation | `src/orca/{client,worktrees,terminals}.ts` |
+| Bounded model routing and provider pressure | `src/routing/`, `src/agents/`, `config/{routing,escalation}.yaml` |
+| Worker planning, integration, and remediation | `src/workflow/{dispatch,step-workers,steps,orchestrator-*}.ts` |
+| Trusted local validation | `src/validation/{local,result,safety}.ts` |
+| GitHub checks, draft PRs, and provenance | `src/github/` |
+| Restart recovery and reconciliation | `src/recovery/`, `src/workflow/wire-recovery.ts` |
+| Independent final review | `src/reviews/`, `src/workflow/orchestrator-review.ts` |
+| Routing scoring and controlled promotion | `src/scoring/`, `config/scoring.yaml` |
+| Operator CLI and Windows supervision | `src/cli/main.ts`, `scripts/*supervisor*.ps1` |
+
+## Non-negotiable v1 boundaries
+
+- Humans create/edit Linear issues and are the only pull-request merge authority.
+- The controller may open draft PRs but never merges, force-pushes protected
+  branches, deploys to production, or performs destructive cloud operations.
+- A dependency is complete only after its PR merges into the configured base
+  branch.
+- Each issue uses one parent branch/worktree and produces at most one draft PR.
+- A base-pinned validation contract is trusted as configuration, not as authority:
+  setup and validation commands remain subject to the safety policy.
+- Retry and remediation budgets are finite. A budget or safety boundary is a
+  human-visible block, not an infinite autonomous loop.
 
 ## Explicitly not v1
 
-- product ideation / PM agent / design agent
-- auto-generated product roadmap
-- automatic PR merge
-- production deployments
-- cloud server or public Linear webhook
-- custom web dashboard
-- Slack / Discord notifications
-- fully autonomous dependency mutation
-
-## Suggested build order
-
-1. `state/` + migrations + `config/` loading - nothing works without durable state
-2. `linear/` new-issue adoption + curator, ending at automatic `ai-ready` /
-   `WAITING_READY`; genuinely unresolvable work is `ai-blocked`
-3. `registry.ts` resolution, `scheduler/dag.ts`, `scheduler/capacity.ts`
-4. `orca/client.ts` worktree creation only; verify against a throwaway repo
-5. planner + one worker end-to-end on a trivial issue, no review, no PR
-6. `github/` CI sync, then draft PR
-7. reviewers and the remediation loop
-8. `scoring/` and champion-challenger last - it needs samples to be meaningful
-
-Steps 1-5 give a system that produces a branch. Step 6 gives one that produces
-a PR. Everything after that is quality, and can land incrementally.
+- product ideation, roadmap generation, or a design agent
+- automatic PR merge or production deployment
+- a public webhook, cloud-hosted controller, or custom web dashboard
+- Slack/Discord notifications
+- automatic mutation of the Linear dependency graph

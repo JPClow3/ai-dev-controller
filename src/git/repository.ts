@@ -22,6 +22,10 @@ export const realGit: GitRunner = async (cwd, args) => {
  */
 const SEP = String.fromCharCode(31);
 
+export function isMissingRef(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'exitCode' in error && error.exitCode === 1;
+}
+
 /**
  * Branches the controller must never push to directly.
  *
@@ -131,13 +135,15 @@ export function createGit(git: GitRunner = realGit) {
 
     async branchExists(repoPath: string, branch: string): Promise<boolean> {
       try {
-        await git(repoPath, ['rev-parse', '--verify', `refs/heads/${branch}`]);
+        await git(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
         return true;
-      } catch {
+      } catch (error) {
+        if (!isMissingRef(error)) throw error;
         try {
-          await git(repoPath, ['rev-parse', '--verify', `refs/remotes/origin/${branch}`]);
+          await git(repoPath, ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`]);
           return true;
-        } catch {
+        } catch (remoteError) {
+          if (!isMissingRef(remoteError)) throw remoteError;
           return false;
         }
       }
@@ -148,12 +154,8 @@ export function createGit(git: GitRunner = realGit) {
      * `refs/remotes/origin/*` left behind before the controller restarted.
      */
     async remoteBranchExists(repoPath: string, branch: string): Promise<boolean> {
-      try {
-        const out = await git(repoPath, ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`]);
-        return out.trim().length > 0;
-      } catch {
-        return false;
-      }
+      const out = await git(repoPath, ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`]);
+      return out.trim().length > 0;
     },
 
     async headSha(repoPath: string): Promise<string> {

@@ -169,4 +169,15 @@ describe('registry validation', () => {
       registry({ projects: { a: { repository: { path: 'H:/a', github: 'not-a-slug' } } } }),
     ).toThrow(/owner\/repo/);
   });
+
+  it('rejects multiple default repositories for one Linear project', () => {
+    expect(() =>
+      registry({
+        projects: {
+          a: { repository: { path: 'H:/a', github: 'o/a' }, linear: { project: 'Shared', default: true } },
+          b: { repository: { path: 'H:/b', github: 'o/b' }, linear: { project: 'Shared', default: true } },
+        },
+      }),
+    ).toThrow(/multiple default repositories/);
+  });
 });

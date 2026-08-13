@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { runSchedulerTick, type RunnerDeps } from '../../src/workflow/runner.js';
+import { runLoop, runSchedulerTick, type RunnerDeps } from '../../src/workflow/runner.js';
 import { openDatabase, type ControllerDatabase } from '../../src/state/db.js';
 import { createRepositories } from '../../src/state/repositories.js';
 import { loadControllerConfig } from '../../src/config/load-config.js';
@@ -224,5 +224,29 @@ describe('finishing beats starting', () => {
       }),
     );
     expect(dispatched).toEqual(['UNI-PR', 'UNI-CI', 'UNI-NEW']);
+  });
+});
+
+describe('loop cancellation', () => {
+  it('does no work when cancellation was already requested', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const reconcile = vi.fn(async () => 0);
+
+    await expect(runLoop(deps({ reconcile }), { signal: controller.signal })).resolves.toEqual([]);
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('resolves after cancellation without leaking a SIGINT listener', async () => {
+    const controller = new AbortController();
+    const before = process.listenerCount('SIGINT');
+    const reconcile = vi.fn(async () => 0);
+    const loop = runLoop(deps({ reconcile }), { intervalMs: 60_000, signal: controller.signal });
+
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(loop).resolves.toHaveLength(1);
+    expect(process.listenerCount('SIGINT')).toBe(before);
   });
 });

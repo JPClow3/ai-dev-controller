@@ -58,7 +58,7 @@ describe('registry integrity', () => {
   });
 });
 
-describe('registry matches the filesystem', () => {
+describe.runIf(process.env['AI_DEV_LIVE_REGISTRY'] === '1')('registry matches the filesystem', () => {
   for (const [id, project] of entries) {
     describe(id, () => {
       const path = project.repository.path;

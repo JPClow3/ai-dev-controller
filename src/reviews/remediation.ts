@@ -1,4 +1,7 @@
-import type { EscalationConfig } from '../config/escalation-schema.js';
+import {
+  remediationBudgetExhausted,
+  type EscalationConfig,
+} from '../config/escalation-schema.js';
 import type { Finding, ReviewAssessment } from './review.js';
 
 export interface RemediationTask {
@@ -66,7 +69,7 @@ export function planRemediation(input: RemediationInput, escalation: EscalationC
     return { proceed: false, cycle, tasks: [], dismissed };
   }
 
-  if (input.cyclesUsed >= escalation.limits.reviewRemediationCycles) {
+  if (remediationBudgetExhausted(input.cyclesUsed, escalation.limits.reviewRemediationCycles)) {
     return {
       proceed: false,
       cycle,

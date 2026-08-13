@@ -1,5 +1,10 @@
 # Actionable Controller Status Implementation Plan
 
+> Historical implementation plan. The implemented behavior now also pins
+> validation contracts to a run's base SHA and screens setup and validation
+> commands against the configured safety policy. See `docs/lifecycle.md` and
+> `docs/operations.md` for the live contract.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** Ensure controller status is actionable in Linear, commits, and PRs, while automatically preparing lockfile-backed worktrees and remediating ordinary validation failures.
@@ -280,4 +285,3 @@ Expected: planned controller, test, and documentation files changed; unrelated u
 
     git add README.md docs/lifecycle.md
     git commit -m "docs: explain actionable controller lifecycle status"
-

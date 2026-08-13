@@ -20,6 +20,7 @@ import { applicable } from '../recovery/reconcile.js';
 import { buildController } from '../workflow/wire.js';
 import { runLoop } from '../workflow/runner.js';
 import { assertLifecycleLabelsExist } from '../linear/labels.js';
+import { remediationBudgetExhausted } from '../config/escalation-schema.js';
 
 /**
  * Operational escape hatch, not a daily tool. The normal loop is
@@ -268,7 +269,7 @@ program
 
       const used = repos.remediationCycles(run.id);
       const limit = config.escalation.limits.reviewRemediationCycles;
-      if (used > limit) {
+      if (remediationBudgetExhausted(used, limit)) {
         // The budget is the point; a CLI override would defeat it.
         return void console.log(
           pc.red(`Budget exhausted (${used}/${limit} cycles). Resolve the blocker rather than retrying.`),
@@ -469,4 +470,4 @@ program
     }),
   );
 
-program.parse();
+await program.parseAsync();

@@ -80,16 +80,18 @@ The controller is infrastructure. The CLI is an escape hatch, not a daily tool. 
 - Node >= 24 (developed on 26.4.0)
 - [Orca](https://orca.dev/) desktop app running with its CLI enabled
 - Codex signed in via ChatGPT
-- `pnpm`
+- Corepack and the exact `pnpm` release declared in `packageManager`
 
 ## Setup
 
 ```powershell
-pnpm install
+corepack enable
+pnpm install --frozen-lockfile
 copy .env.example .env
 # fill in values — see below
 pnpm cli migrate
 pnpm cli config
+pnpm cli doctor
 pnpm supervisor:install # Windows: survive Codex/terminal/app exits and logon restarts
 ```
 
@@ -137,19 +139,33 @@ the gitignored, path-only `projects/registry.local.yaml` overlay.
 | `AI_DEV_DB` | No | SQLite database path. Default: `./data/controller.db`. |
 | `AI_DEV_LOG_LEVEL` | No | Log verbosity (`info`, `debug`, etc.). Default: `info`. |
 
-## Scripts
+## Verification and scripts
 
-586 tests pass, with clean typecheck and production build.
+The local verification contract is typecheck, the deterministic test reporter,
+the production build, and the packaged CLI smoke test:
 
 ```powershell
 pnpm build          # compile TypeScript to dist/
 pnpm dev            # run src/index.ts via tsx
 pnpm cli <command>  # run the ai-dev CLI
 pnpm test           # run all tests (vitest)
+pnpm test:ci        # deterministic non-watch reporter used by GitHub Actions
 pnpm test:watch     # vitest in watch mode
 pnpm typecheck      # tsc --noEmit
 pnpm migrate        # run SQLite migrations
 ```
+
+Every push to `main` and every pull request runs the same locked Node 24 gate
+in `.github/workflows/ci.yml`: install, typecheck, tests, production build,
+packaged-CLI smoke test, and a high-severity production dependency audit.
+Windows CI additionally parses and analyzes the supervisor scripts and
+exercises the supervisor process boundary. Machine-local registry path checks
+are intentionally opt-in; run the complete local contract with
+`$env:AI_DEV_LIVE_REGISTRY='1'; pnpm test`.
+
+For routine operation and incident recovery, use
+[the operations runbook](docs/operations.md). It distinguishes read-only
+inspection from commands that resume, retry, or reconcile workflow state.
 
 ## Source layout
 
@@ -170,9 +186,10 @@ src/
   scheduler/    dependency waves, capacity, priority (DAG)
   scoring/      composite scoring, champion-challenger, promotion
   state/        SQLite persistence, run claims, audit trail
+    repositories/ focused issue, run, task, review, score and system stores
   util/         shared utilities
-  validation/   schema validation
-  workflow/     state machine, transition guards, Linear projection
+  validation/   immutable contract readers, safety policy, execution evidence
+  workflow/     state machine, worker lifecycle, validation, recovery wiring
 
 config/
   routing.yaml      model routing aliases
@@ -181,6 +198,7 @@ config/
 docs/
   implementation-plan.md  revised task plan
   lifecycle.md            issue lifecycle and wave semantics
+  operations.md           daily operations and incident runbook
   v1-scope.md             full feature scope with module mapping
   reference/              Orca CLI schema and other captured references
 
@@ -218,6 +236,15 @@ Enforced by the controller; no model can override them.
   attempt.
 - Startup verifies that every lifecycle label exists in Linear before polling
   or persisting curation state.
+- A run with a persisted base SHA reads `.ai-workflow/project.yaml` and any
+  lockfile-backed setup only from that exact commit. A missing or malformed
+  base contract never falls back to the mutable working tree.
+- A declared setup command wins. Without one, setup is inferred only when
+  exactly one supported lockfile exists at the base: `npm ci`,
+  `pnpm install --frozen-lockfile`, or `yarn install --immutable`.
+- Repository-defined validation and setup commands are screened immediately
+  before shell execution. Unsafe commands are recorded as failed safety
+  evidence (exit 126) and never reach the shell.
 
 ## Implementation status
 
@@ -225,6 +252,10 @@ Enforced by the controller; no model can override them.
   prebuild and its source build hangs here.
 - `pnpm-workspace.yaml` and `.npmrc` exist to stop pnpm's install-script gate
   from failing `pnpm test`. Neither blocked package needs its script.
+- Runtime and test dependencies track their current compatible majors. Node
+  type definitions intentionally stay on major 24 because CI targets Node 24;
+  adopting newer runtime types would let code compile against APIs unavailable
+  in the supported runtime.
 - Codex workers run headlessly with `sandbox_mode = "workspace-write"` and the
   Windows sandbox forced to `unelevated`, avoiding unattended UAC prompts.
 - On Windows, `pnpm supervisor:install` registers a current-user Scheduled Task
@@ -240,6 +271,9 @@ Enforced by the controller; no model can override them.
 
 ## Platform notes
 
-- `better-sqlite3` is pinned to `^13` (not `^11`): v11 has no Node 26 prebuild and its source build hangs on this machine.
-- `pnpm-workspace.yaml` and `.npmrc` exist to stop pnpm's install-script gate from failing `pnpm test`. Neither blocked package needs its script.
-- Codex worker profiles pin `sandbox_mode = "workspace-write"` rather than inheriting the global `danger-full-access`.
+- `better-sqlite3` is pinned to `^13` (not `^11`): v11 has no Node 26 prebuild
+  and its source build hangs on this machine.
+- `pnpm-workspace.yaml` and `.npmrc` exist to stop pnpm's install-script gate
+  from failing `pnpm test`. Neither blocked package needs its script.
+- Codex worker profiles pin `sandbox_mode = "workspace-write"` rather than
+  inheriting the global `danger-full-access`.

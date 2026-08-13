@@ -14,6 +14,8 @@ export interface CommandOutcome {
   stdoutTail: string;
   stderrTail: string;
   timedOut: boolean;
+  /** Set when the controller refused to execute the repository command. */
+  safetyViolation?: string;
 }
 
 export interface ValidationSummary {
@@ -30,7 +32,13 @@ export interface ValidationSummary {
  * claim as validation.
  */
 export function summarise(results: CommandOutcome[]): ValidationSummary {
-  const failedRequired = results.filter((r) => r.required && !r.passed).map((r) => r.name);
+  // A safety refusal is a failed gate even when the repository marked the
+  // command optional.  Otherwise a contract could hide a forbidden command
+  // behind `required: false`, the controller would skip execution, and the
+  // run could still proceed as green.
+  const failedRequired = results
+    .filter((r) => (r.required || r.safetyViolation !== undefined) && !r.passed)
+    .map((r) => r.name);
   return { passed: failedRequired.length === 0, results, failedRequired };
 }
 

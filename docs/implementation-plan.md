@@ -1,5 +1,15 @@
 # AI Development Controller — Implementation Plan (revised)
 
+> Historical implementation snapshot from 2026-08-07. Its checkboxes and
+> environment notes are not current operational status; use `README.md`,
+> `docs/lifecycle.md`, and `pnpm cli doctor` for the live contract.
+
+> 2026-08-13 hardening update: validation contracts are now read from each
+> run's immutable base SHA and screened by the controller safety policy; CI,
+> Windows supervision, and process-level tests are checked in. See
+> `docs/operations.md` for current operation and `docs/pilot/first-run.md` for
+> evidence and remaining provider limits.
+
 Supersedes `2026-08-07-ai-dev-controller-implementation.md`. Revised 2026-08-07
 against the actual machine, not assumptions.
 
@@ -78,9 +88,9 @@ Linear      connected, team "Unirv", 7 ai-* labels created
 | 4. Resolution + knowledge | `src/projects/resolver.ts`, `src/knowledge/{discovery,manifest}.ts` | 31 |
 | 5. Scheduler | `src/scheduler/{dag,capacity,priority}.ts` | 38 |
 
-**Known gap:** Task 3's mocked `@linear/sdk` tests are not written. The modules
-are implemented but only exercised by typecheck. Write them before trusting the
-polling loop.
+**Historical gap, now closed:** Linear issue pagination, dependency direction,
+lifecycle-label ownership, automatic curation, cursor recovery, and blocker
+messages now have focused tests under `tests/linear/`.
 
 ### Invariants the tests actually pin down
 
@@ -147,13 +157,13 @@ orca linear issue --current --full --json
 
 ## Task 8 — validation, git integration, GitHub checks, draft PR
 
-- [ ] Read validation commands from the repository's `.ai-workflow/project.yaml`.
+- [x] Read validation commands from the repository's `.ai-workflow/project.yaml`.
       The controller must never contain "run pytest for Python."
-- [ ] Cherry-pick worker commits into the parent branch in dependency order;
+- [x] Cherry-pick worker commits into the parent branch in dependency order;
       conflicts enter `INTEGRATING` remediation rather than letting workers
       touch each other's trees
-- [ ] `gh` is already authenticated — prefer it over a separate token
-- [ ] Cover both CI modes: checks on a pushed branch, and checks that require a
+- [x] `gh` is already authenticated — prefer it over a separate token
+- [x] Cover both CI modes: checks on a pushed branch, and checks that require a
       `pull_request` event. In the latter, an early draft PR is the CI trigger
       but the run stays before `PR_READY` until checks and reviews pass
 

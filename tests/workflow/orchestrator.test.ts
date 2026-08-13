@@ -474,7 +474,9 @@ describe('it blocks for a human on real blockers', () => {
   });
 
   it('blocks once the remediation budget is exhausted', async () => {
-    const d = deps({ remediationCycles: () => 99 });
+    const d = deps({
+      remediationCycles: () => config.escalation.limits.reviewRemediationCycles,
+    });
     const result = await advanceRun(ctx('REMEDIATING'), d);
     expect(result.to).toBe('BLOCKED_HUMAN');
     expect(d.blockForHuman).toHaveBeenCalled();

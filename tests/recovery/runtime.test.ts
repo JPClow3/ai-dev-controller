@@ -229,6 +229,10 @@ describe('runtime startup recovery', () => {
     const run = repos.claimIssueRun('JP-1', 'repo')!;
     db.raw.prepare("UPDATE runs SET state = 'BLOCKED_HUMAN' WHERE id = ?").run(run.id);
 
+    const observeOrca = vi.fn(async () => ({ worktreeExists: true, agentRunning: false, agentSettled: false }));
+    const observeGit = vi.fn(async () => ({ branchExists: true, hasCommitsBeyondBase: false, branchPushed: false }));
+    const observeLinear = vi.fn(async () => ({ label: 'ai-blocked' as const }));
+
     const result = await reconcileIncompleteRuns(recovery({
       observeGitHub: vi.fn(async () => ({
         pullRequestNumber: null,
@@ -237,11 +241,33 @@ describe('runtime startup recovery', () => {
         checksComplete: false,
         requiredChecksPassed: false,
       })),
-      observeGit: vi.fn(async () => ({ branchExists: true, hasCommitsBeyondBase: false, branchPushed: false })),
-      observeOrca: vi.fn(async () => ({ worktreeExists: true, agentRunning: false, agentSettled: false })),
+      observeGit,
+      observeOrca,
+      observeLinear,
     }));
 
     expect(result.appliedRunIds).toEqual([]);
     expect(repos.getRun(run.id)?.state).toBe('BLOCKED_HUMAN');
+    expect(observeOrca).not.toHaveBeenCalled();
+    expect(observeGit).not.toHaveBeenCalled();
+    expect(observeLinear).not.toHaveBeenCalled();
+  });
+
+  it('still observes a human merge while the run is blocked', async () => {
+    const run = repos.claimIssueRun('JP-1', 'repo')!;
+    db.raw.prepare("UPDATE runs SET state = 'BLOCKED_HUMAN' WHERE id = ?").run(run.id);
+
+    const result = await reconcileIncompleteRuns(recovery({
+      observeGitHub: vi.fn(async () => ({
+        pullRequestNumber: 13,
+        isDraft: false,
+        merged: true,
+        checksComplete: true,
+        requiredChecksPassed: true,
+      })),
+    }));
+
+    expect(result.appliedRunIds).toEqual([run.id]);
+    expect(repos.getRun(run.id)?.state).toBe('MERGED');
   });
 });

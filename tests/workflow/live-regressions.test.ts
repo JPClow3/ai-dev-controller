@@ -146,13 +146,43 @@ describe('adopting existing work still claims and records it', () => {
   });
 });
 
+describe('duplicate detection fails closed', () => {
+  it('does not claim or create work when an authoritative source is unavailable', async () => {
+    const unavailableOrca = createOrcaClient({
+      run: vi.fn(async () => {
+        throw new Error('Orca unavailable');
+      }),
+    });
+    const d = deps({ orca: unavailableOrca });
+
+    await expect(dispatchNewIssue(d, {
+      issueId: 'JP-7', projectId: 'portfolio', role: 'work', risk: 'low', slug: 'JPClow3/Portfolio',
+    })).rejects.toThrow(/Orca unavailable/);
+    expect(repos.getActiveRun('JP-7')).toBeNull();
+  });
+
+  it('does not treat a GitHub outage as evidence that no pull request exists', async () => {
+    const unavailableGitHub = createGitHub(vi.fn(async () => {
+      throw new Error('GitHub unavailable');
+    }));
+    const d = deps({ github: unavailableGitHub });
+
+    await expect(dispatchNewIssue(d, {
+      issueId: 'JP-7', projectId: 'portfolio', role: 'work', risk: 'low', slug: 'JPClow3/Portfolio',
+    })).rejects.toThrow(/GitHub unavailable/);
+    expect(repos.getActiveRun('JP-7')).toBeNull();
+  });
+});
+
 describe('new parent worktrees start at the fetched base commit', () => {
   it('fast-forwards the controller-owned parent before recording the workspace', async () => {
     const freshBase = '08cf33de550eb8302c74abdd6733e8173a125b86';
     const gitCalls: Array<{ cwd: string; args: string[] }> = [];
     const gitRunner = vi.fn(async (cwd: string, args: string[]) => {
       gitCalls.push({ cwd, args });
-      if (args[0] === 'rev-parse' && args[1] === '--verify') throw new Error('missing branch');
+      if (args[0] === 'show-ref' && args[1] === '--verify') {
+        throw Object.assign(new Error('missing branch'), { exitCode: 1 });
+      }
       if (args[0] === 'rev-parse' && args[1] === 'origin/main') return freshBase;
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return freshBase;
       return '';

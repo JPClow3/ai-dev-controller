@@ -81,12 +81,14 @@ export async function findExistingWorkspace(
 ): Promise<ExistingWorkspace> {
   const run = deps.repos.getActiveRun(issueId);
 
-  const worktrees = await listWorktrees(deps.orca).catch(() => [] as OrcaWorktree[]);
+  // Duplicate detection is a safety gate. An unavailable source is unknown,
+  // never evidence that no work exists.
+  const worktrees = await listWorktrees(deps.orca);
   const orcaWorktree = worktrees.find((w) => matchesRequestedBranch(w, branch)) ?? null;
 
-  const gitBranchExists = await deps.git.branchExists(repoPath, branch).catch(() => false);
+  const gitBranchExists = await deps.git.branchExists(repoPath, branch);
 
-  const pr = await findPullRequestByBranch(deps.github, slug, branch).catch(() => null);
+  const pr = await findPullRequestByBranch(deps.github, slug, branch);
 
   return {
     controllerWorktreeId: run?.orcaWorktreeId ?? null,
@@ -125,10 +127,10 @@ export async function dispatchNewIssue(
     const adopted = deps.repos.getActiveRun(input.issueId) ?? deps.repos.claimIssueRun(input.issueId, input.projectId);
     const adoptedBranch = shortBranch(existing.orcaWorktree?.branch) || branch;
     if (adopted) {
-      const baseSha = await deps.git.fetchFreshBase(repoPath, baseBranch).catch(() => '');
+      const baseSha = await deps.git.fetchFreshBase(repoPath, baseBranch);
       deps.repos.attachRunWorkspace(adopted.id, {
         branch: adoptedBranch,
-        ...(baseSha ? { baseSha } : {}),
+        baseSha,
         ...(existing.orcaWorktree ? { orcaWorktreeId: existing.orcaWorktree.id } : {}),
       });
     }

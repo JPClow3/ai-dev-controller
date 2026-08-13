@@ -1,5 +1,5 @@
 import type { GitRunner } from '../git/repository.js';
-import { assertControllerBranch } from '../git/repository.js';
+import { assertControllerBranch, isMissingRef } from '../git/repository.js';
 import type { GitHub } from '../github/client.js';
 import { ensureDraftPullRequest, findPullRequestByBranch } from '../github/pull-requests.js';
 import { applyBootstrap, type BootstrapPlan } from './bootstrap.js';
@@ -43,14 +43,17 @@ export async function openBootstrapPullRequest(
 
   const existingPr = deps.pushAndOpenPr === false
     ? null
-    : await findPullRequestByBranch(deps.github, deps.slug, deps.branch).catch(() => null);
+    : await findPullRequestByBranch(deps.github, deps.slug, deps.branch);
 
   const startingBranch = await git(plan.repoPath, ['symbolic-ref', '--short', 'HEAD']).catch(() => '');
 
   // Reuse the branch if it already exists; otherwise branch from the fetched base.
-  const branchExists = await git(plan.repoPath, ['rev-parse', '--verify', `refs/heads/${deps.branch}`])
+  const branchExists = await git(plan.repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${deps.branch}`])
     .then(() => true)
-    .catch(() => false);
+    .catch((error: unknown) => {
+      if (isMissingRef(error)) return false;
+      throw error;
+    });
 
   await git(plan.repoPath, ['fetch', 'origin', deps.baseBranch, '--prune']);
   await git(

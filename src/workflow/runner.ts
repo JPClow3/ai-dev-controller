@@ -254,6 +254,8 @@ export async function runLoop(deps: RunnerDeps, options: LoopOptions = {}): Prom
   const reports: TickReport[] = [];
   let running = false;
 
+  if (options.signal?.aborted) return reports;
+
   const tick = async (): Promise<void> => {
     if (running) {
       log.warn('previous tick still running; skipping this interval');
@@ -276,12 +278,14 @@ export async function runLoop(deps: RunnerDeps, options: LoopOptions = {}): Prom
   };
 
   await tick();
-  if (options.once) return reports;
+  if (options.once || options.signal?.aborted) return reports;
 
   return new Promise((resolve) => {
     const timer = setInterval(() => void tick(), intervalMs);
     const stop = () => {
       clearInterval(timer);
+      options.signal?.removeEventListener('abort', stop);
+      process.removeListener('SIGINT', stop);
       resolve(reports);
     };
     options.signal?.addEventListener('abort', stop, { once: true });

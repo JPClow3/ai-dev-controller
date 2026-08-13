@@ -17,6 +17,11 @@ export interface ControllerConfig {
   registry: ProjectRegistry;
 }
 
+export interface LoadControllerConfigOptions {
+  /** Injectable environment keeps operator overrides deterministic in tests. */
+  env?: Readonly<Record<string, string | undefined>>;
+}
+
 export class ConfigError extends Error {
   constructor(
     readonly file: string,
@@ -112,6 +117,28 @@ function parseWith<S extends z.ZodTypeAny>(schema: S, relative: string, raw: unk
   );
 }
 
+function nonEmptyEnv(env: Readonly<Record<string, string | undefined>>, key: string): string | undefined {
+  const value = env[key]?.trim();
+  return value ? value : undefined;
+}
+
+function applyEnvironmentOverrides(
+  globalRaw: Record<string, unknown>,
+  env: Readonly<Record<string, string | undefined>>,
+): Record<string, unknown> {
+  const orcaBin = nonEmptyEnv(env, 'ORCA_BIN');
+  const database = nonEmptyEnv(env, 'AI_DEV_DB');
+  if (!orcaBin && !database) return globalRaw;
+
+  const orca = isRecord(globalRaw.orca) ? globalRaw.orca : {};
+  const paths = isRecord(globalRaw.paths) ? globalRaw.paths : {};
+  return {
+    ...globalRaw,
+    ...(orcaBin ? { orca: { ...orca, bin: orcaBin } } : {}),
+    ...(database ? { paths: { ...paths, database } } : {}),
+  };
+}
+
 /**
  * Loads and validates every config file. Fails loudly and completely rather
  * than starting with a half-valid policy — a controller running on partially
@@ -120,14 +147,18 @@ function parseWith<S extends z.ZodTypeAny>(schema: S, relative: string, raw: unk
  * `config/local.yaml` is a shallow operator override. The gitignored
  * `projects/registry.local.yaml` can only override existing repository paths.
  */
-export function loadControllerConfig(rootDir: string): ControllerConfig {
+export function loadControllerConfig(rootDir: string, options: LoadControllerConfigOptions = {}): ControllerConfig {
+  const env = options.env ?? process.env;
   const globalRaw = readYaml(rootDir, 'config/global.yaml') as Record<string, unknown>;
   const localPath = resolve(rootDir, 'config/local.yaml');
   const localRaw = existsSync(localPath)
     ? (parse(readFileSync(localPath, 'utf8')) as Record<string, unknown> | null)
     : null;
 
-  const mergedGlobal = localRaw ? { ...globalRaw, ...localRaw } : globalRaw;
+  const mergedGlobal = applyEnvironmentOverrides(
+    localRaw ? { ...globalRaw, ...localRaw } : globalRaw,
+    env,
+  );
 
   const committedRegistry = readYaml(rootDir, 'projects/registry.yaml');
   const localRegistryPath = resolve(rootDir, 'projects/registry.local.yaml');

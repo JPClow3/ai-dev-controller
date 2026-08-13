@@ -263,6 +263,22 @@ describe('nextEscalation', () => {
     if (isHumanBlock(d)) expect(d.trigger).toBe('retry_budget_exhausted');
   });
 
+  it('treats the exact remediation-cycle limit as exhausted', () => {
+    const d = nextEscalation(
+      {
+        ...base,
+        failureClass: 'localized_logic',
+        budget: {
+          ...base.budget,
+          reviewRemediationCycles: escalation.limits.reviewRemediationCycles,
+        },
+      },
+      escDeps,
+    );
+    expect(isHumanBlock(d)).toBe(true);
+    if (isHumanBlock(d)) expect(d.trigger).toBe('retry_budget_exhausted');
+  });
+
   it('rations Sol adjudications separately', () => {
     const d = nextEscalation(
       {

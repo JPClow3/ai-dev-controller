@@ -40,6 +40,27 @@ dispatches a bounded remediation task to a different worker. A failed setup,
 exhausted budget, unsafe action, or incomplete recovery path becomes
 `ai-blocked`.
 
+## Validation is trusted, not assumed
+
+When a run has a recorded base commit, the controller reads
+`.ai-workflow/project.yaml` from that exact commit. It does not use the current
+working copy as a fallback, so a worker cannot introduce or replace the command
+contract mid-run.
+
+An explicit repository setup command takes precedence. Otherwise the controller
+can infer setup only when exactly one recognized lockfile exists at that base:
+
+| Lockfile | Setup |
+| --- | --- |
+| `package-lock.json` | `npm ci` |
+| `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` |
+| `yarn.lock` | `yarn install --immutable` |
+
+Missing, unreadable, or conflicting lockfiles produce no guessed setup. Every
+setup and validation command is screened against the configured forbidden
+operations before the shell is called. A refusal is durable failed evidence
+(exit 126), not a skipped check or an implicit permission grant.
+
 ## Interruptions you will NOT get
 
 - "Worker A is finished. Continue?"
@@ -130,3 +151,21 @@ You:                review -> merge
 
 Merging re-opens whatever the explicit dependency graph permits next, on the
 following polling cycle.
+
+## Operator commands
+
+Use the CLI to inspect first. State-changing commands are deliberate because
+`BLOCKED_HUMAN` is sticky until its underlying cause is resolved.
+
+| Need | Command | Effect |
+| --- | --- | --- |
+| Check all work | `pnpm cli status` | Read-only active runs and open escalations. |
+| Understand one issue | `pnpm cli inspect JP-123` | Read-only branch, worktree, dependency, and transition history. |
+| Check integrations | `pnpm cli doctor` | Read-only configuration, Linear, Orca, and Codex reachability. |
+| Pause future scheduling | `pnpm cli pause JP-123` | Does not kill an already-running agent. Stop that agent in Orca if required. |
+| Resume after resolving a real blocker | `pnpm cli resume JP-123` | Unpauses and requeues a paused or human-blocked run. |
+| Re-attempt a bounded repair | `pnpm cli retry JP-123` | Uses a remaining remediation cycle; never overrides the configured budget. |
+| Compare durable state with external systems | `pnpm cli recover` | Report-only by default. Add `--apply` only after reviewing the report. |
+
+The controller never merges a pull request. `PR_OPEN` means the draft is ready
+for human review and merge.

@@ -32,8 +32,10 @@ export interface RuntimeRecoveryResult {
 /**
  * Reconciles every incomplete run against observed external reality.
  *
- * The probes intentionally run in the order in the design: Orca, Git,
- * GitHub, then Linear. Each failure becomes an unknown (`null`) observation,
+ * Active-work probes intentionally run in the order in the design: Orca,
+ * Git, GitHub, then Linear. Human-blocked runs need only GitHub so an explicit
+ * human merge is still discovered without repeatedly polling dormant systems.
+ * Each failure becomes an unknown (`null`) observation,
  * never evidence that the external object does not exist. This distinction is
  * what keeps a temporary provider outage from turning a healthy run into a
  * human blocker during startup.
@@ -60,10 +62,11 @@ export async function reconcileIncompleteRuns(deps: RuntimeRecoveryDeps): Promis
       }
     };
 
-    const orca = await probe('orca', () => deps.observeOrca(run));
-    const git = await probe('git', () => deps.observeGit(run));
+    const humanBlocked = run.state === 'BLOCKED_HUMAN';
+    const orca = humanBlocked ? null : await probe('orca', () => deps.observeOrca(run));
+    const git = humanBlocked ? null : await probe('git', () => deps.observeGit(run));
     const github = await probe('github', () => deps.observeGitHub(run));
-    const linear = await probe('linear', () => deps.observeLinear(run));
+    const linear = humanBlocked ? null : await probe('linear', () => deps.observeLinear(run));
     const ciTrigger = deps.ciTriggerFor(run);
 
     const report = reconcileRun({

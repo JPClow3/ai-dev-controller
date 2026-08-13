@@ -8,7 +8,7 @@ const supervisorPath = resolve(root, 'scripts/controller-supervisor.ps1');
 const managerPath = resolve(root, 'scripts/manage-windows-supervisor.ps1');
 
 describe.runIf(process.platform === 'win32')('Windows controller supervision', () => {
-  it('ships PowerShell scripts that the installed pwsh parser accepts', async () => {
+  it('ships PowerShell scripts that the installed pwsh parser accepts', { timeout: 15_000 }, async () => {
     for (const path of [supervisorPath, managerPath]) {
       const escaped = path.replaceAll("'", "''");
       const command = [
@@ -29,7 +29,20 @@ describe.runIf(process.platform === 'win32')('Windows controller supervision', (
     expect(manager).toContain('-LogonType Interactive -RunLevel Limited');
     expect(manager).toContain('-RestartCount 999');
     expect(manager).toContain('-MultipleInstances IgnoreNew');
-    expect(manager).toContain('Stop-ControllerOwnedByRepository');
+    expect(manager).toContain('Close-ControllerProcess');
+    expect(manager).toContain('Healthy = $healthy');
+    expect(manager).toContain('if (-not $healthy) { exit 1 }');
+  });
+
+  it('reports a missing task as unhealthy through the real manager process', { timeout: 30_000 }, async () => {
+    const taskName = `AI Dev Controller Test ${process.pid}`;
+    const result = await execa(
+      'pwsh',
+      ['-NoProfile', '-NonInteractive', '-File', managerPath, 'status', '-TaskName', taskName],
+      { reject: false },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain(`not-installed: ${taskName}`);
   });
 
   it('isolates controller pipes and restores Orca without restarting the supervisor', () => {
@@ -38,7 +51,7 @@ describe.runIf(process.platform === 'win32')('Windows controller supervision', (
     expect(supervisor).toContain('RedirectStandardOutput $controllerStdout');
     expect(supervisor).toContain('RedirectStandardError $controllerStderr');
     expect(supervisor).toContain('while (-not $child.WaitForExit($OrcaCheckSeconds * 1000))');
-    expect(supervisor).toContain('Ensure-OrcaRuntime');
+    expect(supervisor).toContain('Invoke-OrcaRuntimeRecovery');
     expect(supervisor).toContain("@('open', '--json')");
   });
 });

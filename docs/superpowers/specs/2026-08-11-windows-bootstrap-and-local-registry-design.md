@@ -1,5 +1,8 @@
 # Windows Bootstrap and Local Registry Design
 
+> Historical design record. For the current install and supervisor behavior,
+> use `docs/windows-notebook-setup.md` and `docs/operations.md`.
+
 ## Goal
 
 Make a fresh Windows notebook ready to operate the controller through one PowerShell entry point, while keeping device-specific repository paths out of committed configuration.

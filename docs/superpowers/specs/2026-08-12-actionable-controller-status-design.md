@@ -1,5 +1,8 @@
 # Actionable Controller Status Design
 
+> Historical design record. The current validation behavior is immutable-base
+> contract reading plus pre-shell safety screening; see `docs/lifecycle.md`.
+
 ## Goal
 
 Make every controller-generated commit, pull request, and Linear lifecycle
