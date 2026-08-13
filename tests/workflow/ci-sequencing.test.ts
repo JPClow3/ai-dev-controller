@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { assertTransitionAllowed, InvalidTransitionError } from '../../src/workflow/transitions.js';
 import { nextAfterLocalValidation } from '../../src/workflow/states.js';
@@ -135,7 +136,7 @@ describe('registry CI modes match the repositories on disk', () => {
   // The production detector, not a second implementation: a naive copy here
   // would have kept passing while the real one was wrong about Portfolio.
   for (const [id, project] of entries) {
-    it(`${id} declares the trigger its workflows actually use`, () => {
+    it.runIf(existsSync(project.repository.path))(`${id} declares the trigger its workflows actually use`, () => {
       expect(project.ci.trigger).toBe(
         detectCiTrigger(project.repository.path, project.repository.baseBranch),
       );
