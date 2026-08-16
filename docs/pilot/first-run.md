@@ -3,9 +3,8 @@
 **Date:** 2026-08-08
 **Repository:** [JPClow3/Lorebound](https://github.com/JPClow3/Lorebound), base `main`
 **Issue:** [JP-8 — Add an affordability check to the shared Ink model](https://linear.app/jpclow/issue/JP-8/add-an-affordability-check-to-the-shared-ink-model)
-**Model portfolio:** ChatGPT-backed Codex profiles only. Both Ollama providers were
-disabled with `AI_DEV_DISABLED_PROVIDERS=ollama,ollama_local`, so every role
-resolved through the provider-pressure path to a Codex alias.
+**Model portfolio:** ChatGPT-backed Codex profiles only (`gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`).
+Every role resolves through the provider-pressure path to a Codex alias.
 
 A second issue, [JP-9](https://linear.app/jpclow/issue/JP-9/report-the-ink-shortfall-in-quoteink),
 was created blocked by JP-8 to exercise the dependency gate. It is expected to

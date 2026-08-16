@@ -3,7 +3,6 @@ import { resolve } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import type { RoutingConfig } from '../config/routing-schema.js';
-import { ollamaTransport } from './ollama-profiles.js';
 import { codexTransport } from './codex-profiles.js';
 import {
   StructuredInvocationError,
@@ -101,7 +100,7 @@ export interface InvokerOptions {
 }
 
 export function createInvoker(options: InvokerOptions) {
-  const transports = options.transports ?? [ollamaTransport(), codexTransport()];
+  const transports = options.transports ?? [codexTransport()];
   const readPrompt =
     options.readPrompt ??
     ((name: string) => readFileSync(resolve(options.rootDir, 'prompts', `${name}.md`), 'utf8'));

@@ -180,6 +180,7 @@ describe('new parent worktrees start at the fetched base commit', () => {
     const gitCalls: Array<{ cwd: string; args: string[] }> = [];
     const gitRunner = vi.fn(async (cwd: string, args: string[]) => {
       gitCalls.push({ cwd, args });
+
       if (args[0] === 'show-ref' && args[1] === '--verify') {
         throw Object.assign(new Error('missing branch'), { exitCode: 1 });
       }
@@ -235,26 +236,8 @@ describe('new parent worktrees start at the fetched base commit', () => {
   });
 });
 
-/**
- * Regression: providerPressures returned only the Orca-derived entry, so
- * "every provider EXHAUSTED" was true from a sample of one. A spent Codex
- * quota throttled the whole controller while Ollama sat idle.
- */
 describe('throttle considers every provider, not one', () => {
-  it('does not throttle when one provider is still usable', () => {
-    const map = withOverride(defaultPressure(config.routing), 'chatgpt', 'EXHAUSTED');
-    const pressures = Object.values(map).map((p) => p.pressure);
-
-    expect(pressures.length).toBeGreaterThan(1);
-    expect(shouldThrottleNewWork({
-      remediationBacklog: 0,
-      remediationBacklogThreshold: 4,
-      providerPressures: pressures,
-    }).throttle).toBe(false);
-  });
-
   it('throttles only when every provider is exhausted', () => {
-    // Derived from the config so adding a provider cannot silently weaken this.
     let map = defaultPressure(config.routing);
     for (const provider of Object.keys(map)) map = withOverride(map, provider, 'EXHAUSTED');
 
@@ -265,10 +248,8 @@ describe('throttle considers every provider, not one', () => {
     }).throttle).toBe(true);
   });
 
-  it('does not throttle while a third provider remains usable', () => {
-    let map = withOverride(defaultPressure(config.routing), 'chatgpt', 'EXHAUSTED');
-    map = withOverride(map, 'ollama', 'EXHAUSTED');
-    // ollama_local is still NORMAL - exactly the situation during this pilot.
+  it('does not throttle when provider is usable', () => {
+    const map = defaultPressure(config.routing);
     expect(shouldThrottleNewWork({
       remediationBacklog: 0,
       remediationBacklogThreshold: 4,
@@ -276,42 +257,18 @@ describe('throttle considers every provider, not one', () => {
     }).throttle).toBe(false);
   });
 
-  /** A single-entry sample was the bug: one exhausted provider looked like all. */
   it('a one-entry sample must not read as total exhaustion', () => {
     expect(shouldThrottleNewWork({
       remediationBacklog: 0,
       remediationBacklogThreshold: 4,
       providerPressures: ['EXHAUSTED'],
     }).throttle).toBe(true);
-    // ...which is why the caller must supply all providers, asserted above.
   });
 });
 
 describe('a disabled provider is never selected', () => {
-  /**
-   * Ollama Cloud answers 403 "requires a subscription" — reachable but
-   * unusable. Challenger exploration kept picking it and failing.
-   */
-  it('routes around it even when exploration would have chosen it', () => {
-    const pressure = withOverride(defaultPressure(config.routing), 'ollama', 'EXHAUSTED');
-    for (let i = 0; i < 20; i += 1) {
-      const decision = selectModel(
-        { projectId: 'portfolio', role: 'routine_bugfix', risk: 'low' },
-        {
-          routing: config.routing,
-          scoring: config.scoring,
-          pressure,
-          stats: () => null,
-          random: () => 0.01, // always explore
-        },
-      );
-      expect(config.routing.aliases[decision.alias]!.provider).not.toBe('ollama');
-    }
-  });
-
-  it('throws rather than dispatching nothing when both are disabled', () => {
-    let pressure = withOverride(defaultPressure(config.routing), 'ollama', 'EXHAUSTED');
-    pressure = withOverride(pressure, 'chatgpt', 'EXHAUSTED');
+  it('throws rather than dispatching nothing when provider is exhausted', () => {
+    const pressure = withOverride(defaultPressure(config.routing), 'chatgpt', 'EXHAUSTED');
     expect(() =>
       selectModel({ projectId: 'portfolio', role: 'routine_bugfix', risk: 'low' }, {
         routing: config.routing,
@@ -341,8 +298,6 @@ describe('real repositories on disk', () => {
   }
 
   it.runIf(existsSync('H:/Code/Freelance/Inova'))('uses the declared base branch, not a hardcoded main', () => {
-    // Inova is on master. Detecting against `main` must not report a live
-    // trigger for workflows that only fire on master.
     const onMaster = detectCiTrigger('H:/Code/Freelance/Inova', 'master');
     const onMain = detectCiTrigger('H:/Code/Freelance/Inova', 'main');
     expect(onMaster).toBe('pull_request');
@@ -356,14 +311,12 @@ describe('real repositories on disk', () => {
   });
 
   it.runIf(existsSync('H:/Code/Freelance/fatec-web'))('reports honestly when no command matches', () => {
-    // fatec-web has build:site / test:e2e, none of which match the candidates.
     const derived = deriveProject('H:/Code/Freelance/fatec-web', 'main');
     expect(derived.commands).toHaveLength(0);
     expect(derived.notes.length).toBeGreaterThan(0);
   });
 
   it.runIf(existsSync('H:/Code/Pessoais/Portfolio'))('completes discovery quickly on a real repo', () => {
-    // Discovery previously took ~90s per repo and hung on a large one.
     const started = Date.now();
     deriveProject('H:/Code/Pessoais/Portfolio', 'main');
     expect(Date.now() - started).toBeLessThan(5000);

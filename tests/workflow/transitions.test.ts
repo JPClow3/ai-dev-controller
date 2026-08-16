@@ -4,7 +4,12 @@ import {
   isLegalTransition,
   InvalidTransitionError,
 } from '../../src/workflow/transitions.js';
-import { WORKFLOW_STATES, projectToLinear, isTerminal } from '../../src/workflow/states.js';
+import {
+  WORKFLOW_STATES,
+  projectToLinear,
+  projectToOrcaBoard,
+  isTerminal,
+} from '../../src/workflow/states.js';
 
 /** Convenience: mechanical facts the guard demands, all proven true. */
 const proven = (...keys: string[]) => Object.fromEntries(keys.map((k) => [k, true]));
@@ -119,5 +124,45 @@ describe('Linear projection', () => {
     expect(projectToLinear('DEPENDENCY_BLOCKED')).toBe('ai-blocked');
     expect(projectToLinear('BLOCKED_HUMAN')).toBe('ai-blocked');
     expect(projectToLinear('PR_OPEN')).toBe('ai-pr-open');
+  });
+});
+
+describe('Orca workspace board projection', () => {
+  it('maps every workflow state to a valid board status', () => {
+    const validStatuses = new Set(['todo', 'in-progress', 'in-review', 'completed']);
+    for (const state of WORKFLOW_STATES) {
+      const status = projectToOrcaBoard(state);
+      expect(validStatuses.has(status)).toBe(true);
+    }
+  });
+
+  it('projects early states to todo', () => {
+    expect(projectToOrcaBoard('DISCOVERED')).toBe('todo');
+    expect(projectToOrcaBoard('CURATING')).toBe('todo');
+    expect(projectToOrcaBoard('WAITING_READY')).toBe('todo');
+    expect(projectToOrcaBoard('DEPENDENCY_BLOCKED')).toBe('todo');
+    expect(projectToOrcaBoard('BLOCKED_HUMAN')).toBe('todo');
+  });
+
+  it('projects active implementation states to in-progress', () => {
+    expect(projectToOrcaBoard('QUEUED')).toBe('in-progress');
+    expect(projectToOrcaBoard('PLANNING')).toBe('in-progress');
+    expect(projectToOrcaBoard('IMPLEMENTING')).toBe('in-progress');
+    expect(projectToOrcaBoard('INTEGRATING')).toBe('in-progress');
+    expect(projectToOrcaBoard('LOCAL_VALIDATION')).toBe('in-progress');
+    expect(projectToOrcaBoard('PR_DRAFT_OPEN')).toBe('in-progress');
+    expect(projectToOrcaBoard('REMEDIATING')).toBe('in-progress');
+  });
+
+  it('projects review and ready states to in-review', () => {
+    expect(projectToOrcaBoard('CI')).toBe('in-review');
+    expect(projectToOrcaBoard('FINAL_REVIEW')).toBe('in-review');
+    expect(projectToOrcaBoard('PR_READY')).toBe('in-review');
+    expect(projectToOrcaBoard('PR_OPEN')).toBe('in-review');
+  });
+
+  it('projects terminal merged or cancelled states to completed', () => {
+    expect(projectToOrcaBoard('MERGED')).toBe('completed');
+    expect(projectToOrcaBoard('CANCELLED')).toBe('completed');
   });
 });

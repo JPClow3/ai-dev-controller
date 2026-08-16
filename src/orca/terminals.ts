@@ -89,8 +89,8 @@ export async function stopTerminals(client: OrcaClient, worktreeSelector: string
 /**
  * Launches a worker agent in its own worktree.
  *
- * `agentName` is the Orca custom agent (e.g. "Ollama DeepSeek V4"), which maps
- * to `codex --profile ollama-deepseek`. The controller chooses the alias; Orca
+ * `agentName` is the Orca custom agent (e.g. "GPT Luna High"), which maps
+ * to `codex --profile gpt-luna-high`. The controller chooses the alias; Orca
  * owns the session.
  */
 export async function launchAgent(

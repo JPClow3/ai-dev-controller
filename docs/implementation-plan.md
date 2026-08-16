@@ -14,7 +14,7 @@ Supersedes `2026-08-07-ai-dev-controller-implementation.md`. Revised 2026-08-07
 against the actual machine, not assumptions.
 
 **Goal:** turn approved Linear issues into dependency-aware Orca worktrees,
-route implementation across Codex and Ollama Cloud, validate and review the
+route implementation across ChatGPT/Codex models (Luna/Sol/Terra), validate and review the
 result, and open a draft GitHub PR — with you as the only merge authority.
 
 ---
@@ -27,7 +27,7 @@ result, and open a draft GitHub PR — with you as the only merge authority.
 | `better-sqlite3@^11.8.1` | v11 has **no Node 26 prebuild** | Pinned **`^13.0.3`**, which ships prebuilds for win32-x64. No compile, no VS Build Tools. |
 | `pnpm add` just works | pnpm 11 **blocks install scripts** and fails `pnpm test` on its own gate | `pnpm-workspace.yaml` declares both blocked packages triaged. |
 | Codex profiles are additive | Your `config.toml` sets `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` globally | Every worker profile **pins its own** `sandbox_mode = "workspace-write"`. Your interactive session is untouched. |
-| Model access available | **Codex weekly quota at 100%**, resets Sat ~12:49; **Ollama not installed** | No worker models until either is resolved. Tasks 1–5 need none. |
+| Hybrid Model Routing | **Pure ChatGPT/Codex stack** (Luna/Sol/Terra) | Ollama Cloud decommissioned; Luna-heavy cost routing with token usage tracking. |
 | `orca skills install --skill ...` | Skills are **bundled** with the CLI (`orca skills list`) | No install step needed. |
 | Assumed Orca commands | Real surface captured in `docs/reference/orca-agent-context.json` | Build the adapter against that file, not against guesses. |
 
@@ -52,7 +52,6 @@ git         2.55.0.windows.3
 gh          2.96.0        authed JPClow3, scopes: repo, workflow, gist, read:org
 codex       0.144.6       OAuth, joaopaulo.grv4@proton.me
 orca        1.4.176       runtime ready, 13 repositories registered
-ollama      NOT INSTALLED
 Linear      connected, team "Unirv", 7 ai-* labels created
 ```
 
@@ -60,21 +59,12 @@ Linear      connected, team "Unirv", 7 ai-* labels created
 
 - [x] Node / git / gh / Codex / Orca verified
 - [x] 7 `ai-*` Linear labels created in the Unirv workspace
-- [x] 9 Codex profiles + `ollama-launch` provider written to `~/.codex/config.toml`
-      (backup: `config.toml.pre-ai-dev-20260807-172919.bak`)
-- [x] Tasks 1–5 implemented, 105 tests passing, typecheck clean
-
-### Blocked on you
-
-- [ ] **Install Ollama**, then `ollama signin`. This is the critical path: it is
-      the only worker family available before the Codex quota resets.
-- [ ] Verify the three cloud models respond:
-      `ollama run glm-5.2:cloud "Reply only with OK"` (and kimi-k2.7-code, deepseek-v4-flash)
-- [ ] `codex --profile ollama-glm` from a normal terminal, once Ollama is up
-- [ ] Register the 9 Orca custom agents (Settings → Agents), binary `codex`,
-      args `--profile <name>`. Leave the built-in Codex entry alone.
-- [ ] Put a Linear personal API key in `.env` as `LINEAR_API_KEY`
-- [ ] After Saturday: `codex --profile gpt-luna-high` to confirm the GPT tier
+- [x] Codex profiles configured in `~/.codex/config.toml`
+- [x] Tasks 1–14 implemented, full test suite passing, typecheck clean
+- [x] Orca workspace-board synchronization (todo / in-progress / in-review / completed)
+- [x] Ollama Cloud fully removed from workflow, schemas, and routing
+- [x] Luna-heavy cost routing and token tracking implemented
+- [x] Per-project Antigravity skills and git commit hooks configured across repositories
 
 ---
 
@@ -114,7 +104,7 @@ These are the ones worth keeping green as the rest lands:
 ## Task 6 — routing and escalation policy
 
 **Files:** `src/routing/{types,policy,pressure,selector,escalation}.ts`,
-`src/agents/{codex-profiles,ollama-profiles}.ts`
+`src/agents/codex-profiles.ts`
 **Tests:** `tests/routing/{selector,escalation}.test.ts`
 
 Config already exists and validates (`config/routing.yaml`, `escalation.yaml`).
@@ -182,9 +172,8 @@ Unchanged.
 
 ## Task 14 — pilot
 
-**Cannot run before Ollama is installed or the Codex quota resets.** Suggested
-pilot repository: something small with deterministic tests. Of the 13
-registered in Orca, `inmet-api` or `Portfolio` are the least risky; avoid
+Suggested pilot repository: something small with deterministic tests. Of the
+registered projects in Orca, `Portfolio` or `Lorebound` are the least risky; avoid
 `unirv-monolith` for a first run.
 
 ---

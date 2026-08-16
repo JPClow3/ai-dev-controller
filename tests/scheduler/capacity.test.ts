@@ -106,8 +106,8 @@ describe('reserved sub-limits', () => {
     expect(decision.limit).toBe('gpt_heavy_agents');
   });
 
-  it('caps Luna workers at 3', () => {
-    const agents = Array.from({ length: 3 }, (_, i) =>
+  it('caps Luna workers at 4', () => {
+    const agents = Array.from({ length: 4 }, (_, i) =>
       agent({ issueId: `UNI-${i}`, repositoryId: `r${i}`, luna: true }),
     );
     const decision = availableCapacity(state(agents), config, request({ issueId: 'UNI-9', luna: true }));
@@ -115,21 +115,8 @@ describe('reserved sub-limits', () => {
     expect(decision.limit).toBe('gpt_luna_workers');
   });
 
-  it('caps Ollama workers at 3', () => {
-    const agents = Array.from({ length: 3 }, (_, i) =>
-      agent({ issueId: `UNI-${i}`, repositoryId: `r${i}`, provider: 'ollama', luna: false }),
-    );
-    const decision = availableCapacity(
-      state(agents),
-      config,
-      request({ issueId: 'UNI-9', provider: 'ollama' }),
-    );
-    expect(decision.allowed).toBe(false);
-    expect(decision.limit).toBe('ollama_workers');
-  });
-
   it('lets a heavy GPT agent through while Luna slots are full', () => {
-    const agents = Array.from({ length: 3 }, (_, i) =>
+    const agents = Array.from({ length: 4 }, (_, i) =>
       agent({ issueId: `UNI-${i}`, repositoryId: `r${i}`, luna: true }),
     );
     const decision = availableCapacity(state(agents), config, request({ issueId: 'UNI-9', heavy: true }));

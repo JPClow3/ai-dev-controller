@@ -98,3 +98,21 @@ Invoke-ScriptAnalyzer -Path scripts -Recurse -Severity Warning,Error
 The GitHub workflow repeats these gates on locked Node 24 for pushes to `main`
 and pull requests. A local pass is strong evidence, but remote CI is the final
 published-change confirmation.
+
+## Release management and Git tagging
+
+Tagging creates deterministic recovery anchors and marks milestone releases across all repositories.
+
+### Best practices
+- Always create **annotated** tags with a message detailing key changes.
+- Push tags explicitly using `git push origin <tag>` or `git push --tags`.
+- Tag hotfixes immediately on the patch release commit.
+
+```powershell
+# Create an annotated release tag
+git tag -a v0.1.0 -m "Release v0.1.0: Controller orchestration and Luna-heavy routing"
+
+# Push tag to remote origin
+git push origin v0.1.0
+```
+

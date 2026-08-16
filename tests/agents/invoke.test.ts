@@ -7,7 +7,7 @@ const ROOT = process.cwd();
 const routing = loadControllerConfig(ROOT).routing;
 
 /** Replays scripted responses, so schema handling is testable without a live model. */
-function scripted(responses: string[], provider: 'ollama' | 'chatgpt' = 'ollama'): StructuredTransport {
+function scripted(responses: string[], provider: 'chatgpt' = 'chatgpt'): StructuredTransport {
   let call = 0;
   return {
     name: 'scripted',
@@ -93,21 +93,21 @@ describe('extractJson', () => {
 describe('structured invocation', () => {
   it('returns validated data on a clean first response', async () => {
     const result = await invoker(scripted([validCuration])).structured({
-      alias: 'deepseek_flash',
+      alias: 'luna_high',
       prompt: 'curator',
       input: 'raw issue text',
       schema: 'curated-issue',
     });
 
     expect(result.attempts).toBe(1);
-    expect(result.alias).toBe('deepseek_flash');
+    expect(result.alias).toBe('luna_high');
     expect((result.data as { issue_id: string }).issue_id).toBe('UNI-142');
     expect(result.usage?.outputTokens).toBe(20);
   });
 
   it('retries once when the model returns prose instead of JSON', async () => {
     const result = await invoker(scripted(['I think we should...', validCuration])).structured({
-      alias: 'deepseek_flash',
+      alias: 'luna_high',
       prompt: 'curator',
       input: 'raw issue',
       schema: 'curated-issue',
@@ -119,7 +119,7 @@ describe('structured invocation', () => {
     const incomplete = JSON.stringify({ verdict: 'curated', issue_id: 'UNI-1' });
     const transport = scripted([incomplete, validCuration]);
     const result = await invoker(transport).structured({
-      alias: 'deepseek_flash',
+      alias: 'luna_high',
       prompt: 'curator',
       input: 'raw issue',
       schema: 'curated-issue',
@@ -134,7 +134,7 @@ describe('structured invocation', () => {
     const junk = JSON.stringify({ verdict: 'curated', issue_id: 'UNI-1' });
     await expect(
       invoker(scripted([junk])).structured({
-        alias: 'deepseek_flash',
+        alias: 'luna_high',
         prompt: 'curator',
         input: 'raw issue',
         schema: 'curated-issue',
@@ -149,7 +149,7 @@ describe('structured invocation', () => {
     const bad = JSON.stringify({ verdict: 'needs_context', issue_id: 'UNI-1' });
     await expect(
       invoker(scripted([bad])).structured({
-        alias: 'deepseek_flash',
+        alias: 'luna_high',
         prompt: 'curator',
         input: 'x',
         schema: 'curated-issue',
@@ -170,8 +170,18 @@ describe('structured invocation', () => {
   });
 
   it('refuses when no transport supports the alias provider', async () => {
+    const unsupportingTransport: StructuredTransport = {
+      name: 'unsupported',
+      supports: () => false,
+      complete: vi.fn(),
+    };
     await expect(
-      invoker(scripted([validCuration], 'ollama')).structured({
+      createInvoker({
+        rootDir: ROOT,
+        routing,
+        transports: [unsupportingTransport],
+        readPrompt: () => 'SYSTEM PROMPT',
+      }).structured({
         alias: 'luna_high',
         prompt: 'curator',
         input: 'x',
@@ -182,12 +192,9 @@ describe('structured invocation', () => {
 });
 
 describe('transport selection', () => {
-  it('routes ollama and chatgpt aliases to different transports', () => {
-    const ollamaOnly = scripted([validCuration], 'ollama');
-    const codexOnly = scripted([validCuration], 'chatgpt');
-    expect(ollamaOnly.supports(routing.aliases['deepseek_flash']!)).toBe(true);
-    expect(ollamaOnly.supports(routing.aliases['luna_high']!)).toBe(false);
-    expect(codexOnly.supports(routing.aliases['luna_high']!)).toBe(true);
-    expect(codexOnly.supports(routing.aliases['glm_5_2']!)).toBe(false);
+  it('routes aliases based on transport provider support', () => {
+    const chatgptOnly = scripted([validCuration], 'chatgpt');
+    expect(chatgptOnly.supports(routing.aliases['luna_high']!)).toBe(true);
+    expect(chatgptOnly.supports(routing.aliases['sol_high']!)).toBe(true);
   });
 });

@@ -91,10 +91,9 @@ describe('Codex quota exhaustion', () => {
         manualOverride: false,
         resetAt: '2026-08-15T22:14:00.000Z',
       },
-    ], ['ollama']);
+    ], ['disabled_provider']);
 
     expect(pressure['chatgpt']?.pressure).toBe('EXHAUSTED');
-    expect(pressure['ollama']?.pressure).toBe('EXHAUSTED');
-    expect(pressure['ollama_local']?.pressure).not.toBe('EXHAUSTED');
+    expect(pressure['disabled_provider']?.pressure).toBe('EXHAUSTED');
   });
 });

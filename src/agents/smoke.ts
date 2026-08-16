@@ -1,20 +1,20 @@
 import 'dotenv/config';
 import { loadControllerConfig } from '../config/load-config.js';
 import { createInvoker } from './invoke.js';
-import { ollamaTransport } from './ollama-profiles.js';
+import { codexTransport } from './codex-profiles.js';
 import { StructuredInvocationError } from './types.js';
 
 /**
  * End-to-end smoke test of the model invocation path against a real model.
  *
- * Exercises: HTTP transport -> JSON extraction -> schema validation -> retry.
- * Uses whichever alias is passed (default `local_smoke`, a small local model)
- * so the wiring can be proven without a paid subscription.
+ * Exercises: Codex transport -> JSON extraction -> schema validation -> retry.
+ * Uses whichever alias is passed (default `luna_low`, the cheapest tier) so
+ * the wiring is proven for a handful of tokens.
  *
  *   pnpm tsx src/agents/smoke.ts [alias]
  */
 const ROOT = process.cwd();
-const alias = process.argv[2] ?? 'local_smoke';
+const alias = process.argv[2] ?? 'luna_low';
 
 const RAW_ISSUE = `
 Title: remember me keeps logging people out
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   const invoker = createInvoker({
     rootDir: ROOT,
     routing: config.routing,
-    transports: [ollamaTransport()],
+    transports: [codexTransport()],
   });
 
   const started = Date.now();

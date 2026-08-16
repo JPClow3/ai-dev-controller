@@ -29,8 +29,7 @@ describe('loadControllerConfig', () => {
   it('applies the approved sub-limits and poll interval', () => {
     const { concurrency } = loadControllerConfig(ROOT).global;
     expect(concurrency.gptHeavyAgents).toBe(2);
-    expect(concurrency.gptLunaWorkers).toBe(3);
-    expect(concurrency.ollamaWorkers).toBe(3);
+    expect(concurrency.gptLunaWorkers).toBe(4);
     expect(concurrency.agentsPerRepository).toBe(5);
     expect(loadControllerConfig(ROOT).global.pollIntervalSeconds).toBe(45);
   });
@@ -319,9 +318,22 @@ pressure:
     }
   });
 
-  it('an ollama alias declares the model tag its transport needs', () => {
-    const { aliases } = loadControllerConfig(ROOT).routing;
-    const local = aliases['local_smoke'];
-    if (local) expect(local.model).toBeTruthy();
+  it('keeps routing deliberately Luna-heavy for cost', () => {
+    const { aliases, roles } = loadControllerConfig(ROOT).routing;
+    const lunaRouted = Object.entries(roles)
+      .filter(([name]) => name !== 'orchestrator' && name !== 'high_risk')
+      .map(([, role]) => role.champion);
+    expect(lunaRouted.length).toBeGreaterThan(0);
+    for (const name of lunaRouted) {
+      expect(aliases[name]!.model, `${name} should stay on the Luna tier`).toBe('gpt-5.6-luna');
+    }
+    // The Sol tier remains reserved for review and high-risk judgement.
+    expect(roles['orchestrator']!.champion).toBe('sol_high');
+    expect(roles['high_risk']!.champion).toBe('sol_xhigh');
+  });
+
+  it('weights token usage in the routing utility', () => {
+    const { utilityWeights } = loadControllerConfig(ROOT).routing.pressure;
+    expect(utilityWeights.tokenPenalty).toBeGreaterThan(0);
   });
 });

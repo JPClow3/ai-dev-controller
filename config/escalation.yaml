@@ -40,13 +40,11 @@ forbidden:
   requirement_ambiguity:
     - "*"
 
-# The legacy action name is retained for config compatibility. In the OpenAI
-# pilot it changes model tier or reasoning effort instead of switching vendor.
+# The legacy action name is retained for config compatibility. With every
+# worker on OpenAI models it changes model tier or reasoning effort instead
+# of switching vendor.
 cross_family_preference:
-  deepseek: [luna_high, terra_high]
   openai: [luna_xhigh, terra_high, terra_xhigh]
-  kimi: [luna_high, terra_high]
-  glm: [luna_high, terra_high]
 
 review_remediation:
   orchestrator_validates_finding: true

@@ -1,5 +1,21 @@
 import type { ControllerDatabase } from '../db.js';
 
+/** Mean output tokens of one alias+role from the ledger, null when unmeasured. */
+function averageOutputTokens(
+  db: ControllerDatabase,
+  role: string,
+  aliasId: string,
+): number | null {
+  const row = db.raw
+    .prepare(
+      `SELECT AVG(output_tokens) AS avg_tokens FROM token_usage
+        WHERE role = ? AND alias_id = ? AND output_tokens IS NOT NULL`,
+    )
+    .get(role, aliasId) as { avg_tokens: number | null } | undefined;
+  const avg = row?.avg_tokens;
+  return avg != null && Number.isFinite(avg) ? avg : null;
+}
+
 export function createScoringRepositories(db: ControllerDatabase) {
   return {
     /** Stores one immutable attempt score and updates routing aggregates once. */
@@ -95,7 +111,7 @@ export function createScoringRepositories(db: ControllerDatabase) {
       projectId: string,
       role: string,
       alias: string,
-    ): { samples: number; compositeAvg: number | null; successRate: number | null; medianMinutes: number | null } | null {
+    ): { samples: number; compositeAvg: number | null; successRate: number | null; medianMinutes: number | null; avgOutputTokens: number | null } | null {
       const row = db.raw
         .prepare(
           `SELECT samples, composite_avg, success_rate, median_minutes FROM routing_stats
@@ -110,7 +126,33 @@ export function createScoringRepositories(db: ControllerDatabase) {
         compositeAvg: row.composite_avg,
         successRate: row.success_rate,
         medianMinutes: row.median_minutes,
+        avgOutputTokens: averageOutputTokens(db, role, alias),
       };
+    },
+
+    /**
+     * Records tokens consumed by one structured call and makes the running
+     * average visible to routing. Tokens are the budget a subscription
+     * actually spends, so the selector treats a verbose alias as a more
+     * expensive one.
+     */
+    recordTokenUsage(input: {
+      aliasId: string;
+      role: string;
+      inputTokens?: number | undefined;
+      outputTokens?: number | undefined;
+    }): void {
+      db.raw
+        .prepare(
+          `INSERT INTO token_usage (alias_id, role, input_tokens, output_tokens)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          input.aliasId,
+          input.role,
+          input.inputTokens ?? null,
+          input.outputTokens ?? null,
+        );
     },
 
     routingStats(): Array<{

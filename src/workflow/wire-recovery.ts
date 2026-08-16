@@ -16,7 +16,7 @@ import {
 import { listWorktrees, worktreePathFromId } from '../orca/worktrees.js';
 import { matchesRequestedBranch } from './dispatch.js';
 import { finalizeRunScores } from '../scoring/runtime.js';
-import { projectToLinear } from './states.js';
+import { projectToLinear, projectToOrcaBoard } from './states.js';
 import { logger } from '../util/log.js';
 
 const log = logger('wire-recovery');
@@ -28,6 +28,12 @@ export interface RecoveryWiring {
   git: Git;
   github: GitHub;
   syncLinear: (issueId: string, state: Parameters<typeof projectToLinear>[0]) => Promise<void>;
+  /** Moves the run's worktree to its board column. Optional: presentation only. */
+  syncBoard?: (
+    issueId: string,
+    worktreeId: string | null,
+    state: Parameters<typeof projectToOrcaBoard>[0],
+  ) => Promise<void>;
 }
 
 /** Reconciles durable state with Orca, Git, GitHub and Linear observations. */
@@ -175,6 +181,7 @@ export function createRecovery(wiring: RecoveryWiring): (apply?: boolean) => Pro
       async onApplied(run, report) {
         if (!apply) return;
         await syncLinear(run.issueId, report.derivedState);
+        await wiring.syncBoard?.(run.issueId, run.orcaWorktreeId, report.derivedState);
         if (report.derivedState === 'MERGED') {
           await finalizeRunScores({ run, repos, git, scoring: config.scoring }).catch((error: unknown) => {
             log.warn(`${run.issueId}: merge-recovery scoring deferred - ${(error as Error).message}`);

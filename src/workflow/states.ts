@@ -1,3 +1,5 @@
+import type { OrcaWorkspaceStatus } from '../orca/worktrees.js';
+
 /**
  * Controller workflow states.
  *
@@ -156,4 +158,44 @@ export const LINEAR_PROJECTION: Readonly<Record<WorkflowState, AiLifecycleLabel 
 
 export function projectToLinear(state: WorkflowState): AiLifecycleLabel | null {
   return LINEAR_PROJECTION[state];
+}
+
+/**
+ * What the Orca workspace board is allowed to see.
+ *
+ * The board is coarser than the state machine on purpose — its columns exist
+ * so a human can see at a glance what is worth looking at, not to mirror
+ * internal churn. `in-progress` covers everything from queue to local
+ * validation, `in-review` starts the moment CI or a reviewer sees the change,
+ * and `completed` is reserved for runs whose PR merged (or was cancelled —
+ * the board has no "abandoned" column, and leaving cancelled work pinned in
+ * a live column is the stale-board problem again).
+ *
+ * Blocked and failed runs go back to `todo`: they are waiting on a human,
+ * which is exactly what that column is for.
+ */
+export const ORCA_BOARD_PROJECTION: Readonly<Record<WorkflowState, OrcaWorkspaceStatus>> = {
+  DISCOVERED: 'todo',
+  CURATING: 'todo',
+  WAITING_READY: 'todo',
+  QUEUED: 'in-progress',
+  PLANNING: 'in-progress',
+  IMPLEMENTING: 'in-progress',
+  INTEGRATING: 'in-progress',
+  LOCAL_VALIDATION: 'in-progress',
+  PR_DRAFT_OPEN: 'in-progress',
+  REMEDIATING: 'in-progress',
+  CI: 'in-review',
+  FINAL_REVIEW: 'in-review',
+  PR_READY: 'in-review',
+  PR_OPEN: 'in-review',
+  MERGED: 'completed',
+  DEPENDENCY_BLOCKED: 'todo',
+  BLOCKED_HUMAN: 'todo',
+  FAILED: 'todo',
+  CANCELLED: 'completed',
+};
+
+export function projectToOrcaBoard(state: WorkflowState): OrcaWorkspaceStatus {
+  return ORCA_BOARD_PROJECTION[state];
 }

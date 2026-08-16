@@ -135,7 +135,6 @@ the gitignored, path-only `projects/registry.local.yaml` overlay.
 | `GITHUB_TOKEN` | No | Token with `repo` + `workflow` scopes. Falls back to the authenticated `gh` CLI identity. The controller never merges. |
 | `ORCA_BIN` | No | Path to `orca` CLI. Default: `orca` (assumes it's on PATH). |
 | `CODEX_BIN` | No | Path to `codex` CLI. Default: `codex`. |
-| `OLLAMA_BASE_URL` | No | Ollama Cloud base URL. Default: `http://localhost:11434/v1`. |
 | `AI_DEV_DB` | No | SQLite database path. Default: `./data/controller.db`. |
 | `AI_DEV_LOG_LEVEL` | No | Log verbosity (`info`, `debug`, etc.). Default: `info`. |
 
@@ -264,15 +263,30 @@ Enforced by the controller; no model can override them.
   after an unexpected exit. It also checks the Orca runtime every 30 seconds
   and runs `orca open --json` when the desktop runtime disappears. Inspect it
   with `pnpm supervisor:status`; remove it with `pnpm supervisor:uninstall`.
-- Production routing defaults to OpenAI: Luna medium curates, Luna high handles
-  routine work, Terra high handles complex/large-context work, and Sol high
-  orchestrates and reviews. Challengers vary only reasoning effort on the same
-  underlying model.
+- Production routing defaults to OpenAI with a Luna-heavy cost optimization:
+  Luna xhigh/high handles curation, planning, routine bugfixes, multi-file features,
+  and large context; Sol handles high-risk changes, reviews, and orchestration.
+  Average token consumption is persisted to SQLite (`token_usage`) and penalizes
+  excessively verbose aliases.
+- Orca workspace board columns (`todo`, `in-progress`, `in-review`, `completed`)
+  are synchronized in real-time on every workflow state transition and recovery pass.
+
+## Git tagging and release workflow
+
+Every managed project uses annotated Git tags for release versioning and deterministic rollback points:
+
+```powershell
+# Create an annotated release tag
+git tag -a v1.0.0 -m "Release v1.0.0: Stable milestone release"
+
+# Push tag to origin
+git push origin v1.0.0
+```
 
 ## Platform notes
 
-- `better-sqlite3` is pinned to `^13` (not `^11`): v11 has no Node 26 prebuild
-  and its source build hangs on this machine.
+- `better-sqlite3` is pinned to `^13` (not `^11`): v11 has no Node 26
+  prebuild and its source build hangs on this machine.
 - `pnpm-workspace.yaml` and `.npmrc` exist to stop pnpm's install-script gate
   from failing `pnpm test`. Neither blocked package needs its script.
 - Codex worker profiles pin `sandbox_mode = "workspace-write"` rather than

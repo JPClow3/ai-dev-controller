@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-export const MODEL_FAMILIES = ['openai', 'deepseek', 'kimi', 'glm'] as const;
+/**
+ * One family remains: every worker runs on OpenAI models through the ChatGPT
+ * subscription. The former deepseek/kimi/glm families were Ollama Cloud
+ * aliases, which were removed; the field stays so review-independence rules
+ * keep a family to key on if a second provider is ever reintroduced.
+ */
+export const MODEL_FAMILIES = ['openai'] as const;
 export type ModelFamily = (typeof MODEL_FAMILIES)[number];
 
 /** A worker's identity is model + reasoning effort + harness. The alias key
@@ -9,11 +15,7 @@ const aliasSchema = z
   .object({
     family: z.enum(MODEL_FAMILIES),
     harness: z.string(),
-    // `ollama` (cloud) and `ollama_local` are separate providers because their
-    // availability is unrelated: cloud models are subscription-gated and can
-    // return 403 while a locally pulled model on the same daemon works fine.
-    // Collapsing them would disable both whenever one is unusable.
-    provider: z.enum(['chatgpt', 'ollama', 'ollama_local']),
+    provider: z.literal('chatgpt'),
     profile: z.string(),
     /**
      * Underlying model tag, for providers called over HTTP rather than through
@@ -23,7 +25,6 @@ const aliasSchema = z
     model: z.string().optional(),
     reasoning_effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
     context_window: z.number().int().positive().optional(),
-    usage_class: z.enum(['low', 'medium', 'high']).optional(),
   })
   .transform((a) => ({
     family: a.family,
@@ -33,7 +34,6 @@ const aliasSchema = z
     model: a.model,
     reasoningEffort: a.reasoning_effort,
     contextWindow: a.context_window,
-    usageClass: a.usage_class,
   }));
 
 const roleSchema = z
@@ -80,6 +80,7 @@ export const routingConfigSchema = z
           expected_score: z.number(),
           scarcity_penalty: z.number(),
           latency_penalty: z.number(),
+          token_penalty: z.number().default(0.2),
         }),
         sources: z.array(z.string()),
       })
@@ -91,6 +92,7 @@ export const routingConfigSchema = z
           expectedScore: p.utility_weights.expected_score,
           scarcityPenalty: p.utility_weights.scarcity_penalty,
           latencyPenalty: p.utility_weights.latency_penalty,
+          tokenPenalty: p.utility_weights.token_penalty,
         },
         sources: p.sources,
       })),

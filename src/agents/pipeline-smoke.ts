@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { loadControllerConfig } from '../config/load-config.js';
 import { createInvoker } from './invoke.js';
-import { ollamaTransport } from './ollama-profiles.js';
 import { codexTransport } from './codex-profiles.js';
 import { createAgents, reviewerCandidates } from './roles.js';
 import { StructuredInvocationError } from './types.js';
@@ -14,12 +13,12 @@ import { assessReview, type ReviewResult } from '../reviews/review.js';
  *
  *   pnpm tsx src/agents/pipeline-smoke.ts [alias]
  *
- * Proves the wiring, not the model: a small local model failing a schema is a
- * legitimate outcome, because it still demonstrates that invalid output is
- * caught rather than acted on.
+ * Proves the wiring, not the model: a model failing a schema is a legitimate
+ * outcome, because it still demonstrates that invalid output is caught
+ * rather than acted on.
  */
 const ROOT = process.cwd();
-const alias = process.argv[2] ?? 'local_smoke';
+const alias = process.argv[2] ?? 'luna_low';
 const config = loadControllerConfig(ROOT);
 
 const RAW_ISSUE = `
@@ -39,7 +38,7 @@ async function main(): Promise<void> {
   const invoker = createInvoker({
     rootDir: ROOT,
     routing: config.routing,
-    transports: [ollamaTransport(), codexTransport()],
+    transports: [codexTransport()],
   });
   const agents = createAgents(invoker, config.routing);
   let failures = 0;

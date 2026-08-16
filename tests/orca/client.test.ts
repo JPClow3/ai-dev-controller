@@ -8,6 +8,7 @@ import {
 import {
   createParentWorktree,
   createWorkerWorktree,
+  setWorktreeWorkspaceStatus,
   findRepoBySlug,
   branchNameFor,
   hasExistingWork,
@@ -141,13 +142,27 @@ describe('worktree creation', () => {
       parentSelector: 'id:wt1',
       repoSelector: 'id:repo1',
       name: 'ai-UNI-2-api',
-      agent: 'Ollama DeepSeek V4',
+      agent: 'Codex Luna',
     });
 
     const args = calls[0]!;
     expect(args).toContain('--parent-worktree');
     expect(args[args.indexOf('--parent-worktree') + 1]).toBe('id:wt1');
     expect(args).toContain('--agent');
+  });
+
+  it('updates worktree workspace board status', async () => {
+    const { calls, client } = fakeCli(envelope({ id: 'wt1', ok: true }));
+    await setWorktreeWorkspaceStatus(client, 'id:wt1', 'in-progress');
+
+    expect(calls[0]).toEqual([
+      'worktree',
+      'set',
+      '--worktree',
+      'id:wt1',
+      '--workspace-status',
+      'in-progress',
+    ]);
   });
 });
 

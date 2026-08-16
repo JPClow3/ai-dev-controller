@@ -18,9 +18,8 @@ import type { StructuredTransport } from './types.js';
  *                          invalid JSON. This flag writes only the final
  *                          assistant message.
  *
- *   --output-schema        Native structured output, the Codex equivalent of
- *                          Ollama's `response_format`. Enforcing the shape at
- *                          the provider is much stronger than asking politely.
+ *   --output-schema        Native structured output enforcing JSON schema adherence.
+ *                          Enforcing the shape at the provider is much stronger than asking politely.
  */
 export function codexTransport(bin = process.env['CODEX_BIN'] ?? 'codex'): StructuredTransport {
   return {
@@ -143,7 +142,4 @@ export const EXPECTED_CODEX_PROFILES = [
   'gpt-sol-medium',
   'gpt-sol-high',
   'gpt-sol-xhigh',
-  'ollama-glm',
-  'ollama-kimi',
-  'ollama-deepseek',
 ] as const;

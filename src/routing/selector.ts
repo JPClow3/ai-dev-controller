@@ -16,9 +16,10 @@ export interface SelectorDeps {
 /**
  * We route task types, not whole issues.
  *
- * One issue can use multiple tiers: Luna for curation and routine workers,
- * Terra for complex implementation, and Sol for orchestration/review. Within
- * each role challengers vary reasoning effort on the same model.
+ * One issue can use multiple tiers: Luna carries curation, planning and
+ * routine work and is the deliberate default for cost, and Sol handles
+ * orchestration review and high-risk work. Within each role challengers vary
+ * reasoning effort on the same model.
  */
 export function selectModel(input: RoutingInput, deps: SelectorDeps): RoutingDecision {
   const { routing } = deps;
@@ -103,7 +104,7 @@ export function selectModel(input: RoutingInput, deps: SelectorDeps): RoutingDec
 }
 
 /**
- * utility = expected_score − scarcity_penalty − latency_penalty
+ * utility = expected_score − scarcity_penalty − latency_penalty − token_penalty
  *
  * With no samples yet, the champion gets a small prior so the configured
  * hypothesis wins until evidence overturns it.
@@ -130,7 +131,27 @@ export function utilityOf(alias: string, input: RoutingInput, deps: SelectorDeps
       ? Math.max(0, stats.medianMinutes / target - 1) * weights.latencyPenalty
       : 0;
 
-  return expected * weights.expectedScore - scarcity - latency;
+  return expected * weights.expectedScore - scarcity - latency - tokenPenaltyOf(stats, weights.tokenPenalty);
+}
+
+/**
+ * Where the configured token penalty saturates. A structured call on this
+ * controller runs from a few thousand to a few tens of thousands of output
+ * tokens, so an alias averaging 50k burns the full penalty.
+ */
+export const TOKEN_SATURATION_TOKENS = 50_000;
+
+/**
+ * Tokens are a consideration, not a price: within a flat subscription they
+ * are the budget actually being spent. Two aliases with equal scores and
+ * latency diverge on verbosity, and the quieter one wins.
+ */
+export function tokenPenaltyOf(
+  stats: Pick<AliasStats, 'avgOutputTokens'> | null,
+  weight: number,
+): number {
+  if (!stats?.avgOutputTokens || stats.avgOutputTokens <= 0 || weight <= 0) return 0;
+  return Math.min(1, stats.avgOutputTokens / TOKEN_SATURATION_TOKENS) * weight;
 }
 
 /**

@@ -18,7 +18,7 @@ import type { ModelAlias } from '../config/routing-schema.js';
 export type InvocationKind = 'structured' | 'agentic';
 
 export interface StructuredRequest {
-  /** Routing alias, e.g. `deepseek_flash`. Carries model + effort + harness. */
+  /** Routing alias, e.g. `luna_medium`. Carries model + effort + harness. */
   alias: string;
   /** Prompt file under prompts/, e.g. `curator`. */
   prompt: string;
@@ -58,9 +58,9 @@ export class StructuredInvocationError extends Error {
 /**
  * A way of getting one structured response out of one provider.
  *
- * Kept deliberately narrow so Ollama (HTTP) and Codex (subprocess) can be
- * swapped, mocked, and — importantly — measured against each other, since
- * routing statistics compare aliases across providers.
+ * Kept deliberately narrow so transports can be swapped, mocked, and —
+ * importantly — measured against each other, since routing statistics
+ * compare aliases across transports.
  */
 export interface StructuredTransport {
   readonly name: string;
@@ -74,10 +74,9 @@ export interface StructuredTransport {
      * The JSON Schema the reply must satisfy.
      *
      * Passed so a transport can enforce it natively where the provider
-     * supports that — Ollama via `response_format`, Codex via
-     * `--output-schema`. Schema-level enforcement is far stronger than asking
-     * a model to please only print JSON, and it removes a whole class of
-     * retry.
+     * supports that — Codex via `--output-schema`. Schema-level enforcement is
+     * far stronger than asking a model to please only print JSON, and it
+     * removes a whole class of retry.
      */
     schema?: object;
   }): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number } }>;

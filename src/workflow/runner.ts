@@ -203,7 +203,7 @@ export async function runSchedulerTick(deps: RunnerDeps): Promise<TickReport> {
       issueId: item.issueId,
       repositoryId: projectId,
       aliasId: 'pending',
-      provider: 'ollama',
+      provider: 'chatgpt',
       heavy: false,
       luna: false,
     });

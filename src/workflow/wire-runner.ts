@@ -291,7 +291,7 @@ export function createRunnerDeps(wiring: RunnerWiring): RunnerDeps {
             issueId: r.issueId,
             repositoryId: r.repositoryId,
             aliasId: 'active',
-            provider: 'ollama' as const,
+            provider: 'chatgpt' as const,
             heavy: false,
             luna: false,
           })),
@@ -305,8 +305,8 @@ export function createRunnerDeps(wiring: RunnerWiring): RunnerDeps {
       async providerPressures() {
         // Start from every configured provider, then overlay what Orca reports.
         // Returning only the Orca-derived entry made "all providers EXHAUSTED"
-        // true from a sample of one: a spent Codex quota throttled the whole
-        // controller even though Ollama was idle and usable.
+        // true from a sample of one: a spent ChatGPT quota must throttle on
+        // real evidence, and an unreadable account list must not.
         let observed = {};
         try {
           const accounts = await orca.json<{ rateLimits?: Parameters<typeof pressureFromOrca>[0] }>([

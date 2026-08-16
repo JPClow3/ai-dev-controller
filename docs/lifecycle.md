@@ -93,19 +93,43 @@ Suggested relation: LIN-417 blockedBy LIN-390
 Execution paused pending DAG approval.
 ```
 
-## Internal state vs what Linear sees
+## Internal state vs what Linear & Orca Board sees
 
-Linear stays readable on purpose. `worker_retry_2`, `glm_review`, `ci_pending`
-live in the controller, never in the issue tracker.
+Linear stays readable on purpose, and Orca's workspace board columns automatically track active issue progress.
 
-| Internal | Linear |
-| --- | --- |
-| DISCOVERED, CURATING | `ai-curate` |
-| WAITING_READY | `ai-ready` |
-| QUEUED, PLANNING, IMPLEMENTING, INTEGRATING, LOCAL_VALIDATION, REMEDIATING | `ai-running` |
-| CI, FINAL_REVIEW, PR_READY | `ai-reviewing` |
-| DEPENDENCY_BLOCKED, BLOCKED_HUMAN, FAILED | `ai-blocked` |
-| PR_OPEN | `ai-pr-open` |
+| Internal State | Linear Label | Orca Workspace Board |
+| --- | --- | --- |
+| DISCOVERED, CURATING | `ai-curate` | `todo` |
+| WAITING_READY | `ai-ready` | `todo` |
+| QUEUED, PLANNING, IMPLEMENTING, INTEGRATING, LOCAL_VALIDATION, PR_DRAFT_OPEN, REMEDIATING | `ai-running` | `in-progress` |
+| CI, FINAL_REVIEW, PR_READY, PR_OPEN | `ai-reviewing` / `ai-pr-open` | `in-review` |
+| MERGED, CANCELLED | (done / closed) | `completed` |
+| DEPENDENCY_BLOCKED, BLOCKED_HUMAN, FAILED | `ai-blocked` | `todo` |
+
+## Git Tagging Best Practice
+
+Git tags provide immutable release anchors, rollback targets, and audit checkpoints across all managed projects.
+
+### Tagging Standards
+1. **Semantic Versioning (`vMAJOR.MINOR.PATCH`)**:
+   - `MAJOR`: Breaking changes or major architectural redesigns.
+   - `MINOR`: New features, endpoints, or backward-compatible capabilities.
+   - `PATCH`: Bug fixes, security remediations, and maintenance tasks.
+2. **Annotated Tags**: Always use annotated tags (`-a`) with descriptive changelog summaries.
+3. **Monorepo / Component Tagging**: In monorepos (e.g. `lorebound`, `throughline`), prefix tags with the package or app name (e.g., `packages/core@v1.2.0`, `apps/web@v2.0.0`).
+4. **Pre-release & RC Tags**: Use `-rc.N` or `-beta.N` (e.g., `v1.5.0-rc.1`) before deploying production milestones.
+
+### Workflow Example
+```powershell
+# Create an annotated release tag on the current merged commit
+git tag -a v1.2.0 -m "Release v1.2.0: Multi-project worktree status tracking and Luna-heavy routing"
+
+# Push the tag to remote
+git push origin v1.2.0
+
+# List existing tags
+git tag -n -l "v*"
+```
 
 ## One issue, one PR
 

@@ -15,7 +15,6 @@ const concurrencySchema = z
     global_agents: z.number().int().positive(),
     gpt_heavy_agents: z.number().int().nonnegative(),
     gpt_luna_workers: z.number().int().nonnegative(),
-    ollama_workers: z.number().int().nonnegative(),
     agents_per_repository: z.number().int().positive(),
   })
   .transform((c) => ({
@@ -24,7 +23,6 @@ const concurrencySchema = z
     globalAgents: c.global_agents,
     gptHeavyAgents: c.gpt_heavy_agents,
     gptLunaWorkers: c.gpt_luna_workers,
-    ollamaWorkers: c.ollama_workers,
     agentsPerRepository: c.agents_per_repository,
   }));
 

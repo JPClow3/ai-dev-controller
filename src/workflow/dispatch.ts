@@ -51,7 +51,7 @@ export interface DispatchDeps {
   github: GitHub;
   git: Git;
   routing: SelectorDeps;
-  /** Orca custom agent name for a routing alias, e.g. "Ollama DeepSeek V4". */
+  /** Orca custom agent name for a routing alias, e.g. "GPT Luna High". */
   agentNameFor: (alias: string) => string;
 }
 
@@ -274,9 +274,6 @@ export function defaultAgentNameFor(config: ControllerConfig): (alias: string) =
     sol_medium: 'GPT Sol Medium',
     sol_high: 'GPT Sol High',
     sol_xhigh: 'GPT Sol XHigh',
-    glm_5_2: 'Ollama GLM 5.2',
-    kimi_code: 'Ollama Kimi K2.7',
-    deepseek_flash: 'Ollama DeepSeek V4',
   };
 
   return (alias: string) => {

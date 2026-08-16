@@ -106,12 +106,12 @@ describe('selectModel', () => {
     expect(d.alias).toBe('luna_medium');
   });
 
-  it('uses Terra as the large-context worker', () => {
+  it('routes large-context work to the deepest Luna effort', () => {
     const d = selectModel(
       { projectId: 'lorebound', role: 'large_context', risk: 'low', contextEstimate: 900_000 },
       deps(),
     );
-    expect(d.alias).toBe('terra_high');
+    expect(d.alias).toBe('luna_xhigh');
   });
 
   it('will not re-select an alias already tried on this task', () => {
@@ -123,8 +123,7 @@ describe('selectModel', () => {
   });
 
   it('throws rather than silently running nothing when every candidate is out', () => {
-    let pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
-    pressure = withOverride(pressure, 'ollama', 'EXHAUSTED');
+    const pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
     expect(() =>
       selectModel({ projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' }, deps({ pressure })),
     ).toThrow(/No eligible model/);
@@ -133,11 +132,25 @@ describe('selectModel', () => {
   it('prefers a better-scoring challenger once evidence exists', () => {
     const stats = (_p: string, _r: string, alias: string): AliasStats | null =>
       alias === 'luna_xhigh'
-        ? { samples: 20, compositeAvg: 0.9, successRate: 0.9, medianMinutes: 10 }
-        : { samples: 20, compositeAvg: 0.4, successRate: 0.5, medianMinutes: 10 };
+        ? { samples: 20, compositeAvg: 0.9, successRate: 0.9, medianMinutes: 10, avgOutputTokens: null }
+        : { samples: 20, compositeAvg: 0.4, successRate: 0.5, medianMinutes: 10, avgOutputTokens: null };
 
     const d = selectModel({ projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' }, deps({ stats }));
     expect(d.alias).toBe('luna_xhigh');
+  });
+
+  it('treats a token-hungry alias as the more expensive one', () => {
+    // Same quality, same speed: the quieter challenger must win the tie.
+    const stats = (_p: string, _r: string, alias: string): AliasStats | null =>
+      alias === 'luna_medium'
+        ? { samples: 20, compositeAvg: 0.7, successRate: 0.8, medianMinutes: 10, avgOutputTokens: 5_000 }
+        : { samples: 20, compositeAvg: 0.7, successRate: 0.8, medianMinutes: 10, avgOutputTokens: 45_000 };
+
+    const d = selectModel(
+      { projectId: 'lorebound', role: 'routine_bugfix', risk: 'low', excludeAliases: ['luna_high'] },
+      deps({ stats, random: () => 0.01 }),
+    );
+    expect(d.alias).toBe('luna_medium');
   });
 });
 
@@ -160,40 +173,47 @@ describe('provider pressure from Orca', () => {
 });
 
 describe('reviewer independence', () => {
-  it('keeps a GPT-dominant implementation away from a GPT reviewer', () => {
+  it('prefers a family that did not author the change when one exists', () => {
+    // selectReviewer keys independence off the routing table, so a synthetic
+    // second family proves the rule without a second real provider.
+    const twoFamilyRouting = {
+      ...routing,
+      aliases: {
+        ...routing.aliases,
+        glm_5_2: { family: 'glm', provider: 'chatgpt', profile: 'stub', model: 'stub' },
+        deepseek_flash: { family: 'deepseek', provider: 'chatgpt', profile: 'stub', model: 'stub' },
+      },
+    } as unknown as typeof routing;
     const authorship = authorshipByFamily(
       [
         { alias: 'luna_high', changedLines: 300 },
         { alias: 'terra_high', changedLines: 100 },
         { alias: 'deepseek_flash', changedLines: 20 },
       ],
-      routing,
+      twoFamilyRouting,
     );
     const reviewer = selectReviewer(
       authorship,
       ['glm_5_2', 'terra_high', 'luna_high'],
-      routing,
+      twoFamilyRouting,
       'least_involved_family',
     );
-    expect(routing.aliases[reviewer]!.family).not.toBe('openai');
+    expect(twoFamilyRouting.aliases[reviewer]!.family).not.toBe('openai');
     expect(reviewer).toBe('glm_5_2');
   });
 
-  it('sends an Ollama-dominant implementation to a GPT reviewer', () => {
+  it('falls back to the least-involved alias when only one family remains', () => {
     const authorship = authorshipByFamily(
       [
-        { alias: 'deepseek_flash', changedLines: 400 },
-        { alias: 'kimi_code', changedLines: 200 },
+        { alias: 'luna_high', changedLines: 300 },
+        { alias: 'luna_xhigh', changedLines: 100 },
       ],
       routing,
     );
-    const reviewer = selectReviewer(
-      authorship,
-      ['terra_high', 'kimi_code', 'deepseek_flash'],
-      routing,
-      'least_involved_family',
-    );
-    expect(routing.aliases[reviewer]!.family).toBe('openai');
+    const reviewer = selectReviewer(authorship, ['sol_medium', 'sol_high', 'luna_high'], routing, 'least_involved_family');
+    // Every candidate author-weighs equally on family share (all openai), so
+    // the first candidate wins rather than undefined behaviour.
+    expect(['sol_medium', 'sol_high', 'luna_high']).toContain(reviewer);
   });
 });
 
@@ -238,9 +258,9 @@ describe('nextEscalation', () => {
     }
   });
 
-  it('answers missing context with more context, not more thinking', () => {
+  it('answers missing context with the large-context role, not more thinking', () => {
     const d = nextEscalation({ ...base, failureClass: 'context_insufficient' }, escDeps);
-    if (!isHumanBlock(d)) expect(d.alias).toBe('terra_high');
+    if (!isHumanBlock(d)) expect(d.alias).toBe('luna_xhigh');
   });
 
   it('sends architecture failures to the orchestrator tier', () => {

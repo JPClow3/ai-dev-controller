@@ -50,6 +50,8 @@ export interface AliasStats {
   compositeAvg: number | null;
   successRate: number | null;
   medianMinutes: number | null;
+  /** Mean output tokens per structured call, from the token ledger. */
+  avgOutputTokens: number | null;
 }
 
 export interface AuthorshipSummary {

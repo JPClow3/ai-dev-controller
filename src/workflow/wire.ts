@@ -6,7 +6,6 @@ import { createOrcaClient, type OrcaClient } from '../orca/client.js';
 import { createGitHub, type GitHub } from '../github/client.js';
 import { createGit, realGit } from '../git/repository.js';
 import { createInvoker } from '../agents/invoke.js';
-import { ollamaTransport } from '../agents/ollama-profiles.js';
 import { codexTransport } from '../agents/codex-profiles.js';
 import { createAgents, reviewerCandidates } from '../agents/roles.js';
 import { defaultPressure, withOverride } from '../routing/pressure.js';
@@ -26,9 +25,10 @@ import {
   findRepoBySlug,
   branchNameFor,
   worktreePathFromId,
+  setWorktreeWorkspaceStatus,
 } from '../orca/worktrees.js';
 import { advanceRun, type OrchestratorDeps, type StepContext } from './orchestrator.js';
-import { projectToLinear } from './states.js';
+import { projectToLinear, projectToOrcaBoard } from './states.js';
 import { createRecovery } from './wire-recovery.js';
 import { createRunnerDeps } from './wire-runner.js';
 import { forcePilotAlias } from '../routing/forced.js';
@@ -63,15 +63,22 @@ export function buildController(options: WiringOptions) {
   const invoker = createInvoker({
     rootDir: config.rootDir,
     routing: config.routing,
-    transports: [ollamaTransport(), codexTransport()],
+    transports: [codexTransport()],
   });
-  const agents = createAgents(invoker, config.routing);
+  const agents = createAgents(invoker, config.routing, {
+    onUsage: (aliasId, role, usage) =>
+      repos.recordTokenUsage({
+        aliasId,
+        role,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+      }),
+  });
 
   // Operator override, which the design lists as a pressure source but nothing
-  // implemented. Needed because a provider can be reachable yet unusable:
-  // Ollama Cloud answers 403 "requires a subscription", which no amount of
-  // retrying fixes, and challenger exploration would otherwise keep selecting
-  // it and failing.
+  // implemented. Needed because a provider can be reachable yet unusable — a
+  // subscription lapse answers 403 forever, which no amount of retrying fixes,
+  // and challenger exploration would otherwise keep selecting it and failing.
   const disabled = (process.env['AI_DEV_DISABLED_PROVIDERS'] ?? '')
     .split(',')
     .map((p) => p.trim())
@@ -230,7 +237,29 @@ export function buildController(options: WiringOptions) {
     const branch = shortBranch(worktree.branch) || requested;
     repos.attachRunWorkspace(runId, { branch, baseSha, orcaWorktreeId: worktree.id });
     log.info(`${run.issueId}: workspace ${branch} at ${baseSha.slice(0, 8)}`);
+    await syncOrcaBoard(run.issueId, worktree.id, 'PLANNING');
     return true;
+  }
+
+  /**
+   * Moves the run's worktree to the board column matching a workflow state.
+   *
+   * Deliberately fire-and-forget beside the Linear write: a board column is
+   * presentation, and losing it must never roll back or block a transition.
+   * Startup recovery re-projects the current state on the next tick, so a
+   * dropped write self-heals.
+   */
+  async function syncOrcaBoard(
+    issueId: string,
+    worktreeId: string | null,
+    state: Parameters<typeof projectToOrcaBoard>[0],
+  ): Promise<void> {
+    if (!worktreeId) return;
+    try {
+      await setWorktreeWorkspaceStatus(orca, worktreeId, projectToOrcaBoard(state));
+    } catch (err) {
+      log.warn(`${issueId}: could not move worktree to "${projectToOrcaBoard(state)}" on the Orca board`, (err as Error).message);
+    }
   }
 
   /**
@@ -279,6 +308,7 @@ export function buildController(options: WiringOptions) {
           moved += 1;
           log.info(`${run.issueId}: ${result.from} -> ${result.to} (${result.detail ?? ''})`);
           await syncLinear(run.issueId, result.to);
+          await syncOrcaBoard(run.issueId, ctx.run.orcaWorktreeId, result.to);
         }
       } catch (err) {
         if (isProviderQuotaExhausted(err)) {
@@ -320,6 +350,7 @@ export function buildController(options: WiringOptions) {
     git,
     github,
     syncLinear,
+    syncBoard: syncOrcaBoard,
   });
 
   const runnerDeps = createRunnerDeps({

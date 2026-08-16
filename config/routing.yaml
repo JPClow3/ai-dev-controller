@@ -3,31 +3,11 @@
 # not the same worker.
 #
 # `profile` is the Codex profile name in ~/.codex/<profile>.config.toml.
-# Production roles use OpenAI models. Challengers keep the same model and vary
-# only reasoning effort, so the experiment measures thinking depth rather than
-# changing two variables at once.
+# All aliases run on OpenAI models through the ChatGPT subscription; the
+# former Ollama Cloud aliases were removed. Challengers keep the same model
+# and vary only reasoning effort, so the experiment measures thinking depth
+# rather than changing two variables at once.
 aliases:
-  deepseek_flash:
-    family: deepseek
-    harness: codex
-    provider: ollama
-    profile: ollama-deepseek
-    context_window: 1000000
-    usage_class: medium
-  kimi_code:
-    family: kimi
-    harness: codex
-    provider: ollama
-    profile: ollama-kimi
-    context_window: 256000
-    usage_class: high
-  glm_5_2:
-    family: glm
-    harness: codex
-    provider: ollama
-    profile: ollama-glm
-    context_window: 976000
-    usage_class: high
   luna_low:
     family: openai
     harness: codex
@@ -99,33 +79,15 @@ aliases:
     model: gpt-5.6-sol
     reasoning_effort: xhigh
 
-  # Local smoke-test worker. Not referenced by any role, so it never gets
-  # routed real work - it exists so the invocation path (HTTP transport, JSON
-  # extraction, schema validation, retry) can be exercised without a paid
-  # Ollama Cloud subscription or Codex quota.
-  local_smoke:
-    family: glm
-    harness: ollama-http
-    provider: ollama_local
-    profile: ollama-local
-    model: qwen2.5-coder:7b
-    context_window: 32768
-    usage_class: low
-
-  # Locally pulled model usable as a real worker through the Codex harness.
-  # Not referenced by any role, so it is never routed automatically - select it
-  # explicitly with AI_DEV_FORCE_ALIAS for a pilot on a known model.
-  local_worker:
-    family: glm
-    harness: codex
-    provider: ollama_local
-    profile: ollama-local
-    model: qwen2.5-coder:7b
-    context_window: 32768
-    usage_class: low
-
 # Starting hypothesis, not permanent truth. Promotion rules in scoring.yaml
 # rewrite the per-repository champion as evidence accumulates.
+#
+# Cost policy: routing is deliberately Luna-heavy. Luna handles curation,
+# planning, and every implementation role including large multi-file work at
+# xhigh effort; Terra aliases stay declared for explicit AI_DEV_FORCE_ALIAS
+# pilots but no role defaults to them. Sol is reserved for orchestration
+# review and high-risk work, because an independent final judgement is the
+# one place the extra tier buys something Luna cannot.
 roles:
   issue_cleanup:
     champion: luna_medium
@@ -133,6 +95,9 @@ roles:
   requirement_cleanup:
     champion: luna_medium
     challengers: [luna_low, luna_high]
+  planning:
+    champion: luna_high
+    challengers: [luna_medium, luna_xhigh]
   routine_mechanical:
     champion: luna_high
     challengers: [luna_medium, luna_xhigh]
@@ -146,11 +111,11 @@ roles:
     champion: luna_high
     challengers: [luna_medium, luna_xhigh]
   multi_file_feature:
-    champion: terra_high
-    challengers: [terra_medium, terra_xhigh]
+    champion: luna_xhigh
+    challengers: [luna_high, luna_medium]
   large_context:
-    champion: terra_high
-    challengers: [terra_medium, terra_xhigh]
+    champion: luna_xhigh
+    challengers: [luna_high]
   orchestrator:
     champion: sol_high
     challengers: [sol_medium, sol_xhigh]
@@ -168,7 +133,7 @@ risk_gates:
     allow_challenger: false
     locked_role: high_risk
 
-# Final review uses the Sol tier, kept separate from Luna/Terra implementation.
+# Final review uses the Sol tier, kept separate from Luna implementation.
 review:
   integration:
     strategy: opposite_family_from_authors
@@ -177,8 +142,10 @@ review:
   escalation: sol_xhigh
 
 # Subscriptions are flat-ish, so the router tracks scarcity rather than
-# pretending each token costs API dollars.
-#   utility = expected_score - scarcity_penalty - latency_penalty
+# pretending each token costs API dollars — but tokens are still the budget a
+# subscription actually spends, so the utility penalises aliases that burn
+# them: verbosity is routed against, not just rate limits.
+#   utility = expected_score - scarcity_penalty - latency_penalty - token_penalty
 pressure:
   states: [LOW, NORMAL, HIGH, EXHAUSTED]
   default: NORMAL
@@ -191,8 +158,12 @@ pressure:
     expected_score: 1.0
     scarcity_penalty: 0.25
     latency_penalty: 0.05
+    # Subtracted at up to this value as an alias's average output tokens
+    # approach TOKEN_SATURATION_TOKENS (see src/routing/selector.ts).
+    token_penalty: 0.2
   sources:
     - orca_account_rate_limits
     - cli_rate_limit_headers
     - request_failure_rate
+    - recorded_token_usage
     - manual_override

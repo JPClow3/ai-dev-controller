@@ -4,9 +4,10 @@ concurrency:
   active_issues: 4
   workers_per_issue: 3
   global_agents: 7
+  # Luna carries most work (see config/routing.yaml), so it gets the larger
+  # share of slots; the heavy sub-limit caps the expensive Terra/Sol tiers.
   gpt_heavy_agents: 2
-  gpt_luna_workers: 3
-  ollama_workers: 3
+  gpt_luna_workers: 4
   agents_per_repository: 5
 
 linear:

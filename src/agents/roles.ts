@@ -18,7 +18,9 @@ import { selectReviewer } from '../routing/selector.js';
  */
 export const AGENT_ROLES = {
   curator: { prompt: 'curator', schema: 'curated-issue', routingRole: 'issue_cleanup' },
-  planner: { prompt: 'planner', schema: 'implementation-plan', routingRole: 'orchestrator' },
+  // Planning is Luna work: decomposition does not need the review tier, and
+  // routing it through Sol made the most expensive model touch every issue.
+  planner: { prompt: 'planner', schema: 'implementation-plan', routingRole: 'planning' },
   classifier: { prompt: 'failure-classifier', schema: 'failure', routingRole: 'issue_cleanup' },
   integrationReviewer: {
     prompt: 'integration-reviewer',
@@ -41,7 +43,16 @@ export interface RoleCallOptions {
   maxAttempts?: number;
 }
 
-export function createAgents(invoker: Invoker, routing: RoutingConfig) {
+export interface AgentsHooks {
+  /**
+   * Fired with the routing role and token counts of every structured call
+   * that reports usage. The composition root persists these into the token
+   * ledger so routing can treat verbosity as cost.
+   */
+  onUsage?: (aliasId: string, routingRole: string, usage: { inputTokens?: number; outputTokens?: number }) => void;
+}
+
+export function createAgents(invoker: Invoker, routing: RoutingConfig, hooks: AgentsHooks = {}) {
   async function call<T>(role: AgentRole, options: RoleCallOptions): Promise<T> {
     const spec = AGENT_ROLES[role];
     const result = await invoker.structured<T>({
@@ -52,6 +63,9 @@ export function createAgents(invoker: Invoker, routing: RoutingConfig) {
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(options.maxAttempts !== undefined ? { maxAttempts: options.maxAttempts } : {}),
     });
+    if (result.usage) {
+      hooks.onUsage?.(options.alias, spec.routingRole, result.usage);
+    }
     return result.data;
   }
 
@@ -134,9 +148,10 @@ export function createAgents(invoker: Invoker, routing: RoutingConfig) {
 export type Agents = ReturnType<typeof createAgents>;
 
 /**
- * Final reviewers come from the orchestrator and high-risk Sol tiers. Normal
- * implementation uses Luna/Terra, keeping the final judgement independent
- * while still allowing reasoning-effort fallbacks inside the Sol model.
+ * Final reviewers come from the orchestrator and high-risk Sol tiers.
+ * Implementation is Luna-heavy for cost; the final judgement stays on Sol so
+ * an independent tier grades the work, with reasoning-effort fallbacks inside
+ * the same model.
  */
 export function reviewerCandidates(routing: RoutingConfig): string[] {
   const routable = new Set<string>();

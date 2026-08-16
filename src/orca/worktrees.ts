@@ -143,6 +143,30 @@ export async function removeWorktree(client: OrcaClient, selector: string, force
 }
 
 /**
+ * The Orca workspace board columns a worktree can sit in. These are the
+ * documented defaults; a workspace with custom columns uses their configured
+ * ids, which is why the setter takes the status as an opaque string.
+ */
+export const WORKSPACE_STATUSES = ['todo', 'in-progress', 'in-review', 'completed'] as const;
+export type OrcaWorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
+
+/**
+ * Moves a worktree to a column on its Orca workspace board.
+ *
+ * Without this the board goes stale the moment the controller starts work:
+ * every worktree stays wherever Orca left it while the run walks
+ * implementing -> reviewing -> merged, and the board — the surface a human
+ * actually watches during the day — never says so.
+ */
+export async function setWorktreeWorkspaceStatus(
+  client: OrcaClient,
+  selector: string,
+  status: OrcaWorkspaceStatus,
+): Promise<void> {
+  await client.json(['worktree', 'set', '--worktree', selector, '--workspace-status', status]);
+}
+
+/**
  * Everywhere a worktree could already exist.
  *
  * Checked before creating anything, because restarting the controller or Orca

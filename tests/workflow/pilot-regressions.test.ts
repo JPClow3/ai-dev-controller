@@ -112,14 +112,11 @@ describe('a stale quota reading is not a spent quota', () => {
 
 describe('a Codex-only portfolio still routes every role', () => {
   /**
-   * The pilot disables both Ollama providers. Every role must still resolve to
-   * a reachable alias, or the run dies at its first routing decision.
+   * Every role must resolve to a reachable alias, or the run dies at its first routing decision.
    */
   it('leaves at least one ChatGPT-backed candidate in every role', () => {
     const config = loadControllerConfig(process.cwd());
-    let pressure = defaultPressure(config.routing);
-    pressure = { ...pressure, ollama: { ...pressure['ollama']!, pressure: 'EXHAUSTED' } };
-    pressure = { ...pressure, ollama_local: { ...pressure['ollama_local']!, pressure: 'EXHAUSTED' } };
+    const pressure = defaultPressure(config.routing);
 
     for (const [name, role] of Object.entries(config.routing.roles)) {
       const reachable = [role.champion, ...role.challengers].filter((alias) => {

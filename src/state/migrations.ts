@@ -278,12 +278,34 @@ CREATE TABLE IF NOT EXISTS controller_meta (
 );
 `;
 
+/**
+ * Append-only ledger of tokens consumed by structured calls.
+ *
+ * Routing treats tokens as a budget: the selector penalises aliases that
+ * consistently burn more of them, so verbosity is routed against rather than
+ * merely observed. Worker sessions are attributed through `attempts`; this
+ * table covers the calls that never create an attempt row (curation,
+ * planning, classification, review).
+ */
+const TOKEN_USAGE = `
+CREATE TABLE IF NOT EXISTS token_usage (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  alias_id          TEXT NOT NULL,
+  role              TEXT NOT NULL,
+  input_tokens      INTEGER,
+  output_tokens     INTEGER,
+  recorded_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_token_usage_alias ON token_usage(alias_id, role);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'init', sql: INIT },
   { version: 2, name: 'issue_url', sql: ISSUE_URL },
   { version: 3, name: 'attempt_commit_range', sql: ATTEMPT_COMMIT_RANGE },
   { version: 4, name: 'provider_pressure_reset', sql: PROVIDER_PRESSURE_RESET },
   { version: 5, name: 'controller_meta', sql: CONTROLLER_META },
+  { version: 6, name: 'token_usage', sql: TOKEN_USAGE },
 ];
 
 export function applyMigrations(db: BetterSqlite3.Database): number {

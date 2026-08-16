@@ -5,7 +5,7 @@ export interface RunningAgent {
   issueId: string;
   repositoryId: string;
   aliasId: string;
-  provider: 'chatgpt' | 'ollama';
+  provider: 'chatgpt';
   /** Terra and Sol are the heavy GPT tiers and have their own sub-limit. */
   heavy: boolean;
   luna: boolean;
@@ -25,7 +25,6 @@ export interface CapacityDecision {
     agents: number;
     gptHeavy: number;
     lunaWorkers: number;
-    ollamaWorkers: number;
     repository: number;
     issueWorkers: number;
   };
@@ -37,11 +36,9 @@ export interface DispatchRequest {
   /**
    * Left undefined for work that has not been routed to a model yet.
    *
-   * Provider sub-limits are only meaningful once an alias is chosen. Assuming
-   * a provider at queue time would burn that provider's reserved slots on work
-   * that might end up on the other family entirely.
+   * Provider sub-limits are only meaningful once an alias is chosen.
    */
-  provider?: 'chatgpt' | 'ollama';
+  provider?: 'chatgpt';
   heavy?: boolean;
   luna?: boolean;
   /** True when this dispatch would also open a new issue slot. */
@@ -59,7 +56,6 @@ function remainingFor(state: CapacityState, config: ConcurrencyConfig, request: 
     agents: config.globalAgents - agents.length,
     gptHeavy: config.gptHeavyAgents - agents.filter((a) => a.heavy).length,
     lunaWorkers: config.gptLunaWorkers - agents.filter((a) => a.luna).length,
-    ollamaWorkers: config.ollamaWorkers - agents.filter((a) => a.provider === 'ollama').length,
     repository: repoCap - agents.filter((a) => a.repositoryId === request.repositoryId).length,
     issueWorkers: config.workersPerIssue - agents.filter((a) => a.issueId === request.issueId).length,
   };
@@ -86,7 +82,6 @@ export function availableCapacity(
     // Provider sub-limits apply only once a model has actually been chosen.
     [request.heavy === true && remaining.gptHeavy <= 0, 'gpt_heavy_agents'],
     [request.luna === true && remaining.lunaWorkers <= 0, 'gpt_luna_workers'],
-    [request.provider === 'ollama' && remaining.ollamaWorkers <= 0, 'ollama_workers'],
   ];
 
   for (const [breached, limit] of checks) {
