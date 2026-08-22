@@ -139,17 +139,21 @@ export function createScoringRepositories(db: ControllerDatabase) {
     recordTokenUsage(input: {
       aliasId: string;
       role: string;
+      provider: string;
+      model?: string | undefined;
       inputTokens?: number | undefined;
       outputTokens?: number | undefined;
     }): void {
       db.raw
         .prepare(
-          `INSERT INTO token_usage (alias_id, role, input_tokens, output_tokens)
-           VALUES (?, ?, ?, ?)`,
+          `INSERT INTO token_usage (alias_id, role, provider, model, input_tokens, output_tokens)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.aliasId,
           input.role,
+          input.provider,
+          input.model ?? null,
           input.inputTokens ?? null,
           input.outputTokens ?? null,
         );
@@ -191,6 +195,56 @@ export function createScoringRepositories(db: ControllerDatabase) {
             firstPassCi: row.first_pass_ci,
             successRate: row.success_rate,
           };
+        });
+    },
+
+    usageSummaryByProvider(): Array<{
+      provider: string;
+      calls: number;
+      inputTokens: number;
+      outputTokens: number;
+    }> {
+      return db.raw
+        .prepare(
+          `SELECT provider,
+                  COUNT(*) AS calls,
+                  COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                  COALESCE(SUM(output_tokens), 0) AS output_tokens
+             FROM token_usage
+            GROUP BY provider
+            ORDER BY provider`,
+        )
+        .all()
+        .map((r) => {
+          const row = r as {
+            provider: string;
+            calls: number;
+            input_tokens: number;
+            output_tokens: number;
+          };
+          return {
+            provider: row.provider,
+            calls: row.calls,
+            inputTokens: row.input_tokens,
+            outputTokens: row.output_tokens,
+          };
+        });
+    },
+
+    usageHistory(days = 14): Array<{ day: string; provider: string; tokens: number }> {
+      return db.raw
+        .prepare(
+          `SELECT date(recorded_at) AS day, provider,
+                  COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS tokens
+             FROM token_usage
+            WHERE recorded_at >= datetime('now', ?)
+            GROUP BY date(recorded_at), provider
+            ORDER BY day, provider`,
+        )
+        .all(`-${days} days`)
+        .map((r) => {
+          const row = r as { day: string; provider: string; tokens: number };
+          return { day: row.day, provider: row.provider, tokens: row.tokens };
         });
     },
   };

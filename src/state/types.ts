@@ -1,4 +1,4 @@
-import type { WorkflowState } from '../workflow/states.js';
+import type { WorkflowState } from '../domain/workflow.js';
 
 export type Risk = 'low' | 'medium' | 'high';
 export type Severity = 'critical' | 'high' | 'medium' | 'low';

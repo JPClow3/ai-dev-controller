@@ -17,7 +17,7 @@ import { listWorktrees, worktreePathFromId } from '../orca/worktrees.js';
 import { matchesRequestedBranch } from './dispatch.js';
 import { finalizeRunScores } from '../scoring/runtime.js';
 import { projectToLinear, projectToOrcaBoard } from './states.js';
-import { logger } from '../util/log.js';
+import { logger, newCorrelationId, withLogContext } from '../util/log.js';
 
 const log = logger('wire-recovery');
 
@@ -179,19 +179,23 @@ export function createRecovery(wiring: RecoveryWiring): (apply?: boolean) => Pro
       },
 
       async onApplied(run, report) {
-        if (!apply) return;
-        await syncLinear(run.issueId, report.derivedState);
-        await wiring.syncBoard?.(run.issueId, run.orcaWorktreeId, report.derivedState);
-        if (report.derivedState === 'MERGED') {
-          await finalizeRunScores({ run, repos, git, scoring: config.scoring }).catch((error: unknown) => {
-            log.warn(`${run.issueId}: merge-recovery scoring deferred - ${(error as Error).message}`);
-          });
-        }
+        await withLogContext({ correlationId: newCorrelationId(), runId: run.id, issueId: run.issueId }, async () => {
+          if (!apply) return;
+          await syncLinear(run.issueId, report.derivedState);
+          await wiring.syncBoard?.(run.issueId, run.orcaWorktreeId, report.derivedState);
+          if (report.derivedState === 'MERGED') {
+            await finalizeRunScores({ run, repos, git, scoring: config.scoring }).catch((error: unknown) => {
+              log.warn(`${run.issueId}: merge-recovery scoring deferred - ${(error as Error).message}`);
+            });
+          }
+        });
       },
     });
 
     for (const failure of result.observationErrors) {
-      log.warn(`${failure.runId}: ${failure.system} recovery probe failed`, failure.message);
+      withLogContext({ correlationId: newCorrelationId(), runId: failure.runId }, () =>
+        log.warn(`${failure.runId}: ${failure.system} recovery probe failed`, failure.message),
+      );
     }
     return result;
   };

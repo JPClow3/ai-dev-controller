@@ -15,6 +15,8 @@ export interface ProviderPressure {
   remainingAllowance: number | null;
   source: string;
   manualOverride: boolean;
+  /** Durable cooldown expiry when this value originates from a transport refusal. */
+  resetAt?: string | null;
 }
 
 export type PressureMap = Record<string, ProviderPressure>;
@@ -86,6 +88,29 @@ export function pressureFromOrca(rateLimits: OrcaRateLimits, now = Date.now()): 
       manualOverride: false,
     },
   };
+}
+
+/**
+ * Turns provider probe results into observed pressure. Only a confirmed
+ * reachability failure is signal; auth status and unconfigured keys are shown
+ * by the TUI but left to real transport failures for routing pressure.
+ */
+export function pressureFromProviderProbes(
+  probes: Array<{ provider: string; connected: boolean; authOk: boolean }>,
+): Partial<PressureMap> {
+  const map: Partial<PressureMap> = {};
+  for (const probe of probes) {
+    if (!probe.connected) {
+      map[probe.provider] = {
+        provider: probe.provider,
+        pressure: 'EXHAUSTED',
+        remainingAllowance: 0,
+        source: 'provider_probe',
+        manualOverride: false,
+      };
+    }
+  }
+  return map;
 }
 
 export function withOverride(map: PressureMap, provider: string, pressure: Pressure): PressureMap {

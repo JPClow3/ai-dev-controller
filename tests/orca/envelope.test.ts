@@ -14,6 +14,7 @@ import {
   workerScript,
   readWorkerExit,
   classifyWorkerLiveness,
+  WORKER_PROCESS_FILE,
 } from '../../src/orca/terminals.js';
 
 /** Controller-owned scratch directory, deliberately outside any worktree. */
@@ -201,7 +202,30 @@ describe('worker launch needs no GUI-registered agent', () => {
    */
   it('runs the repository setup before the agent, when one is declared', () => {
     const script = workerScript('x', CONTROL, { setupCommand: 'npm ci' });
-    expect(script.indexOf('npm ci')).toBeLessThan(script.indexOf('codex exec'));
+    expect(script).toContain("& 'npm' @('ci')");
+    expect(script.indexOf("& 'npm' @('ci')")).toBeLessThan(script.indexOf('codex exec'));
+  });
+
+  it('records the launcher PID so a stale heartbeat does not permit a second worker', () => {
+    const script = workerScript('x', CONTROL);
+    expect(script).toContain(`process.txt`);
+    expect(script).toContain('Set-Content -Path $processPath -Value $PID');
+    expect(WORKER_PROCESS_FILE).toBe('process.txt');
+    expect(classifyWorkerLiveness(null, 0, 200_000, 120_000, true)).toEqual({
+      state: 'running',
+      exitCode: null,
+    });
+  });
+
+  it('refuses setup text that would require PowerShell parsing', () => {
+    expect(() => workerScript('x', CONTROL, { setupCommand: 'npm ci; Write-Host owned' })).toThrow(
+      /argv-only safety policy/,
+    );
+  });
+
+  it('does not interpolate a quoted setup value as PowerShell source', () => {
+    const script = workerScript('x', CONTROL, { setupCommand: "npm ci --cache 'C:\\safe path'" });
+    expect(script).toContain("& 'npm' @('ci', '--cache', 'C:\\safe path')");
   });
 
   it('omits setup entirely when the repository declares none', () => {

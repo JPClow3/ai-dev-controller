@@ -162,6 +162,7 @@ describe('worktree creation', () => {
       'id:wt1',
       '--workspace-status',
       'in-progress',
+      '--json',
     ]);
   });
 });

@@ -1,28 +1,27 @@
 import { z } from 'zod';
+import { PROVIDER_IDS, type ProviderId } from './providers-schema.js';
 
 /**
- * One family remains: every worker runs on OpenAI models through the ChatGPT
- * subscription. The former deepseek/kimi/glm families were Ollama Cloud
- * aliases, which were removed; the field stays so review-independence rules
- * keep a family to key on if a second provider is ever reintroduced.
+ * Model families are used for review-independence: a family should not grade
+ * its own homework. Families are deliberately broad so one provider adding a
+ * model does not require a schema change.
  */
-export const MODEL_FAMILIES = ['openai'] as const;
+export const MODEL_FAMILIES = ['openai', 'zai', 'anthropic', 'moonshot', 'deepseek'] as const;
 export type ModelFamily = (typeof MODEL_FAMILIES)[number];
 
-/** A worker's identity is model + reasoning effort + harness. The alias key
- *  encodes all three, so `luna_high` and `luna_xhigh` compete separately. */
+/** A worker's identity is model + reasoning effort + harness + provider. The
+ *  alias key encodes all four, so `luna_high` (ChatGPT via Codex) and
+ *  `luna_cc` (ChatGPT via Command Code) compete separately. */
 const aliasSchema = z
   .object({
     family: z.enum(MODEL_FAMILIES),
     harness: z.string(),
-    provider: z.literal('chatgpt'),
-    profile: z.string(),
-    /**
-     * Underlying model tag, for providers called over HTTP rather than through
-     * the Codex harness. The Codex profile name does not carry it, and
-     * hardcoding a lookup table means every new model needs a code change.
-     */
-    model: z.string().optional(),
+    provider: z.enum(PROVIDER_IDS),
+    /** Codex profile name; only meaningful for the codex-cli transport. */
+    profile: z.string().optional(),
+    /** Underlying model tag. Required everywhere so routing stats and the TUI
+     *  can group usage by model rather than by transport. */
+    model: z.string(),
     reasoning_effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
     context_window: z.number().int().positive().optional(),
   })
@@ -102,20 +101,21 @@ export const routingConfigSchema = z
   .superRefine((cfg, ctx) => {
     const known = new Set(Object.keys(cfg.aliases));
     for (const [name, alias] of Object.entries(cfg.aliases)) {
-      if (alias.provider !== 'chatgpt') continue;
-      if (!alias.model) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['aliases', name, 'model'],
-          message: 'ChatGPT aliases must declare their OpenAI model',
-        });
-      }
-      if (!alias.reasoningEffort) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['aliases', name, 'reasoning_effort'],
-          message: 'ChatGPT aliases must declare reasoning_effort',
-        });
+      if (alias.provider === 'chatgpt') {
+        if (!alias.profile) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['aliases', name, 'profile'],
+            message: 'ChatGPT aliases must declare their Codex profile',
+          });
+        }
+        if (!alias.reasoningEffort) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['aliases', name, 'reasoning_effort'],
+            message: 'ChatGPT aliases must declare reasoning_effort',
+          });
+        }
       }
     }
     for (const [role, spec] of Object.entries(cfg.roles)) {
@@ -133,26 +133,35 @@ export const routingConfigSchema = z
             path: ['roles', role, 'challengers'],
             message: `unknown alias "${challenger}"`,
           });
+          continue;
         }
         const champion = cfg.aliases[spec.champion];
         const contender = cfg.aliases[challenger];
-        if (champion?.model && contender?.model && champion.model !== contender.model) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['roles', role, 'challengers'],
-            message: `challenger "${challenger}" must use the champion model "${champion.model}"`,
-          });
-        }
-        if (
-          champion?.reasoningEffort &&
-          contender?.reasoningEffort &&
-          champion.reasoningEffort === contender.reasoningEffort
-        ) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['roles', role, 'challengers'],
-            message: `challenger "${challenger}" must use a different reasoning effort`,
-          });
+        if (!champion || !contender) continue;
+
+        // Same-provider challengers keep the experiment to one variable:
+        // reasoning depth. Cross-provider challengers are allowed to change
+        // provider and model at once, because the whole point is a fallback
+        // to a different account/model when one provider is exhausted.
+        if (champion.provider === contender.provider) {
+          if (champion.model !== contender.model) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['roles', role, 'challengers'],
+              message: `challenger "${challenger}" must use the champion model "${champion.model}" when both use provider "${champion.provider}"`,
+            });
+          }
+          if (
+            champion.reasoningEffort &&
+            contender.reasoningEffort &&
+            champion.reasoningEffort === contender.reasoningEffort
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['roles', role, 'challengers'],
+              message: `challenger "${challenger}" must use a different reasoning effort`,
+            });
+          }
         }
       }
     }
@@ -183,3 +192,4 @@ export const routingConfigSchema = z
 
 export type RoutingConfig = z.infer<typeof routingConfigSchema>;
 export type ModelAlias = RoutingConfig['aliases'][string];
+export type { ProviderId };

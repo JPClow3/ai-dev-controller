@@ -107,7 +107,7 @@ export function detectDependencyCycles(issues: SchedulableIssue[]): string[][] {
   function visit(id: string): void {
     if (stack.has(id)) {
       const start = path.indexOf(id);
-      if (start !== -1) cycles.push([...path.slice(start)].sort());
+      if (start !== -1) cycles.push(path.slice(start).sort());
       return;
     }
     if (seen.has(id)) return;

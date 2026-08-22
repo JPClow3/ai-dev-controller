@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import type { OrcaClient } from './client.js';
+import { parseSafeValidationCommand } from '../validation/safety.js';
 
 export interface OrcaTerminal {
   handle: string;
@@ -122,6 +123,8 @@ export const WORKER_RESULT_FILE = 'result.txt';
 export const WORKER_SCRIPT_FILE = 'run.ps1';
 export const WORKER_EXIT_FILE = 'exit.txt';
 export const WORKER_HEARTBEAT_FILE = 'heartbeat.txt';
+/** The parent pwsh process remains alive while its Codex child is running. */
+export const WORKER_PROCESS_FILE = 'process.txt';
 export const WORKER_HEARTBEAT_STALE_MS = 120_000;
 
 /**
@@ -148,14 +151,24 @@ export interface WorkerScriptOptions {
 export function workerScript(profile: string, controlDir: string, options: WorkerScriptOptions = {}): string {
   const { setupCommand } = options;
   const q = (name: string) => `'${join(controlDir, name).replace(/'/g, "''")}'`;
+  const psLiteral = (value: string) => `'${value.replace(/'/g, "''")}'`;
 
   // The repository's own preparation, run before the agent rather than by it.
   // A fresh worktree has no dependencies, and the first live worker said so
   // itself: "node_modules is absent, so the focused script cannot find Vitest
   // (and installing dependencies would modify paths outside my ownership)".
   // It was right on both counts — which is why the controller does it.
-  const setup = setupCommand
-    ? [`Write-Host "ai-dev worker: ${setupCommand}"`, setupCommand, '']
+  const parsedSetup = setupCommand ? parseSafeValidationCommand(setupCommand) : null;
+  if (setupCommand && !parsedSetup) {
+    throw new Error('Refused worker setup command outside the argv-only safety policy.');
+  }
+  const setup = parsedSetup
+    ? [
+        `Write-Host ${psLiteral(`ai-dev worker: ${setupCommand}`)}`,
+        `& ${psLiteral(parsedSetup.file)} @(${parsedSetup.args.map(psLiteral).join(', ')})`,
+        'if ($null -ne $LASTEXITCODE) { $code = $LASTEXITCODE }',
+        '',
+      ]
     : [];
 
   // No `--add-dir` for the git directory, deliberately. Granting it does let
@@ -192,7 +205,9 @@ export function workerScript(profile: string, controlDir: string, options: Worke
   return [
     '$ErrorActionPreference = "Continue"',
     `$heartbeatPath = ${q(WORKER_HEARTBEAT_FILE)}`,
+    `$processPath = ${q(WORKER_PROCESS_FILE)}`,
     'Set-Content -Path $heartbeatPath -Value ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -Encoding ascii',
+    'Set-Content -Path $processPath -Value $PID -Encoding ascii',
     '$heartbeatJob = Start-Job -ScriptBlock {',
     '  param($path)',
     '  while ($true) {',
@@ -200,10 +215,12 @@ export function workerScript(profile: string, controlDir: string, options: Worke
     '    Start-Sleep -Seconds 10',
     '  }',
     '} -ArgumentList $heartbeatPath',
+    '$code = 0',
     ...setup,
-    `Get-Content -Raw ${q(WORKER_PROMPT_FILE)} | ${codex}`,
-    '$code = $LASTEXITCODE',
-    'if ($null -eq $code) { $code = 0 }',
+    'if ($code -eq 0) {',
+    `  Get-Content -Raw ${q(WORKER_PROMPT_FILE)} | ${codex}`,
+    '  if ($null -ne $LASTEXITCODE) { $code = $LASTEXITCODE }',
+    '}',
     'Stop-Job -Job $heartbeatJob -ErrorAction SilentlyContinue',
     'Remove-Job -Job $heartbeatJob -Force -ErrorAction SilentlyContinue',
     `Set-Content -Path ${q(WORKER_EXIT_FILE)} -Value $code -Encoding ascii`,
@@ -234,6 +251,20 @@ export interface WorkerLiveness {
   exitCode: number | null;
 }
 
+/** Whether the parent launcher process recorded by the worker still exists. */
+export function workerProcessIsAlive(processFileContents: string | null): boolean {
+  if (processFileContents === null) return false;
+  const pid = Number.parseInt(processFileContents.trim(), 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means the process exists but cannot be signalled by this account.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 /**
  * Classifies a worker from durable files rather than an Orca terminal handle.
  * A terminal can survive after its command exits, while a process can vanish
@@ -245,10 +276,11 @@ export function classifyWorkerLiveness(
   heartbeatModifiedMs: number | null,
   nowMs = Date.now(),
   staleAfterMs = WORKER_HEARTBEAT_STALE_MS,
+  processAlive = false,
 ): WorkerLiveness {
   const exitCode = readWorkerExit(exitFileContents);
   if (exitCode !== null) return { state: 'settled', exitCode };
-  if (heartbeatModifiedMs !== null && nowMs - heartbeatModifiedMs <= staleAfterMs) {
+  if (processAlive || (heartbeatModifiedMs !== null && nowMs - heartbeatModifiedMs <= staleAfterMs)) {
     return { state: 'running', exitCode: null };
   }
   return { state: 'interrupted', exitCode: null };

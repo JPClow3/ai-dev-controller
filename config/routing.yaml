@@ -78,6 +78,57 @@ aliases:
     profile: gpt-sol-xhigh
     model: gpt-5.6-sol
     reasoning_effort: xhigh
+  # Same models reachable through the Command Code subscription. These are
+  # separate competitors in routing stats: the account, quota and transport
+  # differ even when the model tag is identical.
+  luna_cc:
+    family: openai
+    harness: command-code
+    provider: commandcode
+    model: gpt-5.6-luna
+    reasoning_effort: medium
+  terra_cc:
+    family: openai
+    harness: command-code
+    provider: commandcode
+    model: gpt-5.6-terra
+    reasoning_effort: medium
+  sol_cc:
+    family: openai
+    harness: command-code
+    provider: commandcode
+    model: gpt-5.6-sol
+    reasoning_effort: high
+  glm_cc:
+    family: zai
+    harness: command-code
+    provider: commandcode
+    model: zai-org/GLM-5.2
+    reasoning_effort: high
+  kimi_cc:
+    family: moonshot
+    harness: command-code
+    provider: commandcode
+    model: moonshotai/Kimi-K3
+  deepseek_cc:
+    family: deepseek
+    harness: command-code
+    provider: commandcode
+    model: deepseek/deepseek-v4-pro
+  # Z.AI directly over its OpenAI-compatible HTTP API. This is the first
+  # non-CLI transport; it proves the generic HTTP path for future providers.
+  glm_zai:
+    family: zai
+    harness: http
+    provider: zai
+    model: glm-5.1
+    reasoning_effort: high
+  glm_zai_fast:
+    family: zai
+    harness: http
+    provider: zai
+    model: glm-5-turbo
+    reasoning_effort: high
 
 # Starting hypothesis, not permanent truth. Promotion rules in scoring.yaml
 # rewrite the per-repository champion as evidence accumulates.
@@ -91,37 +142,37 @@ aliases:
 roles:
   issue_cleanup:
     champion: luna_medium
-    challengers: [luna_low, luna_high]
+    challengers: [luna_low, luna_high, luna_cc]
   requirement_cleanup:
     champion: luna_medium
-    challengers: [luna_low, luna_high]
+    challengers: [luna_low, luna_high, luna_cc]
   planning:
     champion: luna_high
-    challengers: [luna_medium, luna_xhigh]
+    challengers: [luna_medium, luna_xhigh, luna_cc, glm_cc]
   routine_mechanical:
     champion: luna_high
-    challengers: [luna_medium, luna_xhigh]
+    challengers: [luna_medium, luna_xhigh, luna_cc]
   routine_behavior:
     champion: luna_high
-    challengers: [luna_medium, luna_xhigh]
+    challengers: [luna_medium, luna_xhigh, luna_cc]
   routine_bugfix:
     champion: luna_high
-    challengers: [luna_medium, luna_xhigh]
+    challengers: [luna_medium, luna_xhigh, luna_cc]
   unit_tests:
     champion: luna_high
-    challengers: [luna_medium, luna_xhigh]
+    challengers: [luna_medium, luna_xhigh, luna_cc]
   multi_file_feature:
     champion: luna_xhigh
-    challengers: [luna_high, luna_medium]
+    challengers: [luna_high, luna_medium, luna_cc]
   large_context:
     champion: luna_xhigh
-    challengers: [luna_high]
+    challengers: [luna_high, luna_cc, glm_cc, glm_zai]
   orchestrator:
     champion: sol_high
     challengers: [sol_medium, sol_xhigh]
   high_risk:
     champion: sol_xhigh
-    challengers: []
+    challengers: [sol_cc, glm_zai]
 
 # Risk gates. Experimentation only ever happens on low-risk work.
 risk_gates:

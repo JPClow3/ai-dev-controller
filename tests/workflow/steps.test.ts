@@ -61,16 +61,25 @@ describe('worker dispatch recovery boundaries', () => {
       resumingDispatch: true,
       recentHeartbeat: false,
       terminalExists: false,
+      processAlive: false,
     })).toBe(false);
     expect(shouldWaitForExistingWorkerLaunch({
       resumingDispatch: true,
       recentHeartbeat: true,
       terminalExists: false,
+      processAlive: false,
     })).toBe(true);
     expect(shouldWaitForExistingWorkerLaunch({
       resumingDispatch: true,
       recentHeartbeat: false,
       terminalExists: true,
+      processAlive: false,
+    })).toBe(true);
+    expect(shouldWaitForExistingWorkerLaunch({
+      resumingDispatch: true,
+      recentHeartbeat: false,
+      terminalExists: false,
+      processAlive: true,
     })).toBe(true);
   });
 
@@ -144,6 +153,15 @@ describe('worker dispatch recovery boundaries', () => {
       rmSync(evidence, { force: true });
       rmSync(`${evidence}.files`, { recursive: true, force: true });
     }
+  });
+
+  it('refuses a retry when Git cannot collect complete failed-attempt evidence', async () => {
+    await expect(cleanFailedAttempt(
+      async () => { throw new Error('git unavailable'); },
+      'C:/worker',
+      ['src/**'],
+      'C:/evidence.patch',
+    )).rejects.toThrow(/git unavailable/);
   });
 });
 

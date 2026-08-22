@@ -245,23 +245,29 @@ human_escalation_triggers: [unresolved_requirement]
     expect(() => loadControllerConfig(dir)).toThrow(/must route to "human"/);
   });
 
-  it('every routing alias declares a profile', () => {
+  it('every routing alias has either a Codex profile or a model it can reach through its provider', () => {
     const { aliases } = loadControllerConfig(ROOT).routing;
     expect(Object.keys(aliases).length).toBeGreaterThan(0);
     for (const [name, alias] of Object.entries(aliases)) {
-      expect(alias.profile, `${name} must declare a profile`).toBeTruthy();
+      expect(
+        alias.profile ?? alias.model,
+        `${name} must declare either a profile or a model`,
+      ).toBeTruthy();
     }
   });
 
-  it('every alias a role can actually route to runs through the Codex harness', () => {
-    // Comparing models across two different agent harnesses would confound the
-    // routing statistics, so real work goes through one interface.
-    const { aliases, roles } = loadControllerConfig(ROOT).routing;
+  it('every routable alias is reachable through a declared transport', () => {
+    // A routable alias must name a provider that exists in providers.yaml.
+    // Harness strings vary (codex, command-code, http), but the provider id is
+    // the stable contract transports dispatch on.
+    const config = loadControllerConfig(ROOT);
+    const { aliases, roles } = config.routing;
+    const knownProviders = new Set(Object.keys(config.providers.providers));
     const routable = new Set(
       Object.values(roles).flatMap((r) => [r.champion, ...r.challengers]),
     );
     for (const name of routable) {
-      expect(aliases[name]!.harness, `${name} is routable and must use codex`).toBe('codex');
+      expect(knownProviders.has(aliases[name]!.provider), `${name} provider must be configured`).toBe(true);
     }
   });
 
@@ -293,27 +299,30 @@ pressure:
     expect(() => loadControllerConfig(dir)).toThrow(/must use the champion model/);
   });
 
-  it('routes production work only through OpenAI models', () => {
-    const { aliases, roles } = loadControllerConfig(ROOT).routing;
+  it('routes production work through declared providers with known model tags', () => {
+    const config = loadControllerConfig(ROOT);
+    const { aliases, roles } = config.routing;
+    const knownProviders = new Set(Object.keys(config.providers.providers));
     const routable = new Set(Object.values(roles).flatMap((role) => [role.champion, ...role.challengers]));
     for (const name of routable) {
-      expect(aliases[name]!.provider, `${name} must use the ChatGPT-backed Codex transport`).toBe('chatgpt');
-      expect(aliases[name]!.family).toBe('openai');
-      expect(aliases[name]!.model).toMatch(/^gpt-5\.6-(luna|terra|sol)$/);
-      expect(aliases[name]!.reasoningEffort).toMatch(/^(low|medium|high|xhigh)$/);
+      const alias = aliases[name]!;
+      expect(knownProviders.has(alias.provider), `${name} must use a configured provider`).toBe(true);
+      expect(alias.model, `${name} must declare a model tag`).toBeTruthy();
     }
   });
 
-  it('compares challengers by thinking level on the same underlying model', () => {
+  it('keeps same-provider challengers on one model and cross-provider challengers free to switch', () => {
     const { aliases, roles } = loadControllerConfig(ROOT).routing;
     for (const [name, role] of Object.entries(roles)) {
       const champion = aliases[role.champion]!;
       for (const challengerName of role.challengers) {
         const challenger = aliases[challengerName]!;
-        expect(challenger.model, `${name}/${challengerName} changes the model`).toBe(champion.model);
-        expect(challenger.reasoningEffort, `${name}/${challengerName} must change thinking`).not.toBe(
-          champion.reasoningEffort,
-        );
+        if (champion.provider === challenger.provider) {
+          expect(challenger.model, `${name}/${challengerName} changes the model`).toBe(champion.model);
+          expect(challenger.reasoningEffort, `${name}/${challengerName} must change thinking`).not.toBe(
+            champion.reasoningEffort,
+          );
+        }
       }
     }
   });

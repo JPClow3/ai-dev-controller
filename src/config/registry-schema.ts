@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CI_TRIGGERS } from '../workflow/states.js';
+import { CI_TRIGGERS } from '../domain/workflow.js';
 
 const projectEntrySchema = z
   .object({

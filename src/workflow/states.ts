@@ -1,4 +1,23 @@
 import type { OrcaWorkspaceStatus } from '../orca/worktrees.js';
+import {
+  type AiLifecycleLabel,
+  type CiTrigger,
+  type WorkflowState,
+} from '../domain/workflow.js';
+
+export {
+  AI_LIFECYCLE_LABELS,
+  CI_TRIGGERS,
+  EXCEPTIONAL_STATES,
+  isExceptional,
+  isTerminal,
+  TERMINAL_STATES,
+  type AiLifecycleLabel,
+  type CiTrigger,
+  type TerminalState,
+  type WorkflowState,
+  WORKFLOW_STATES,
+} from '../domain/workflow.js';
 
 /**
  * Controller workflow states.
@@ -7,62 +26,6 @@ import type { OrcaWorkspaceStatus } from '../orca/worktrees.js';
  * "worker retry 2" or "waiting on GLM review" belongs here, not in the issue
  * tracker — Linear stays readable because it only ever sees the projection.
  */
-export const WORKFLOW_STATES = [
-  'DISCOVERED',
-  'CURATING',
-  'WAITING_READY',
-  'QUEUED',
-  'DEPENDENCY_BLOCKED',
-  'PLANNING',
-  'IMPLEMENTING',
-  'INTEGRATING',
-  'LOCAL_VALIDATION',
-  'PR_DRAFT_OPEN',
-  'CI',
-  'FINAL_REVIEW',
-  'REMEDIATING',
-  'PR_READY',
-  'PR_OPEN',
-  'MERGED',
-  'BLOCKED_HUMAN',
-  'FAILED',
-  'CANCELLED',
-] as const;
-
-export type WorkflowState = (typeof WORKFLOW_STATES)[number];
-
-/**
- * How a repository's CI is actually triggered. Measured, not assumed.
- *
- *   pull_request  workflows fire on `pull_request` (or only on push to the
- *                 base branch). Pushing `ai/...` triggers nothing, so the
- *                 draft PR must open FIRST, purely as the CI trigger.
- *   branch_push   workflows fire on a push to any branch, so CI can run
- *                 before a PR exists.
- *   none          the repository has no CI. Local validation becomes the
- *                 authority — a deliberate, visible relaxation.
- */
-export const CI_TRIGGERS = ['pull_request', 'branch_push', 'none'] as const;
-export type CiTrigger = (typeof CI_TRIGGERS)[number];
-
-/** Terminal states release the issue's active-run claim. */
-export const TERMINAL_STATES = ['MERGED', 'FAILED', 'CANCELLED'] as const satisfies readonly WorkflowState[];
-export type TerminalState = (typeof TERMINAL_STATES)[number];
-
-export const EXCEPTIONAL_STATES = [
-  'BLOCKED_HUMAN',
-  'FAILED',
-  'CANCELLED',
-] as const satisfies readonly WorkflowState[];
-
-export function isTerminal(state: WorkflowState): state is TerminalState {
-  return (TERMINAL_STATES as readonly WorkflowState[]).includes(state);
-}
-
-export function isExceptional(state: WorkflowState): boolean {
-  return (EXCEPTIONAL_STATES as readonly WorkflowState[]).includes(state);
-}
-
 /**
  * Mainline progression.
  *
@@ -112,16 +75,6 @@ export function nextAfterLocalValidation(trigger: CiTrigger): WorkflowState {
       return 'FINAL_REVIEW';
   }
 }
-
-export const AI_LIFECYCLE_LABELS = [
-  'ai-curate',
-  'ai-ready',
-  'ai-running',
-  'ai-blocked',
-  'ai-reviewing',
-  'ai-pr-open',
-] as const;
-export type AiLifecycleLabel = (typeof AI_LIFECYCLE_LABELS)[number];
 
 /**
  * What Linear is allowed to see.

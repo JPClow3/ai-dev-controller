@@ -85,6 +85,65 @@ export function createSystemRepositories(db: ControllerDatabase) {
         });
     },
 
+    setProviderStatus(input: {
+      provider: string;
+      state: 'ready' | 'unavailable' | 'plan_blocked' | 'quota_cooldown' | 'disabled';
+      auth: 'verified' | 'unknown' | 'failed';
+      reason: string;
+      nextProbeAt: string | null;
+    }): void {
+      db.raw
+        .prepare(
+          `INSERT INTO provider_status (provider, connected, auth_ok, detail, probed_at, state, next_probe_at, auth_state)
+           VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+           ON CONFLICT(provider) DO UPDATE SET
+             connected = excluded.connected,
+             auth_ok = excluded.auth_ok,
+             detail = excluded.detail,
+             probed_at = datetime('now'),
+             state = excluded.state,
+             next_probe_at = excluded.next_probe_at,
+             auth_state = excluded.auth_state`,
+        )
+        .run(
+          input.provider,
+          input.state === 'ready' ? 1 : 0,
+          input.auth === 'verified' ? 1 : 0,
+          input.reason,
+          input.state,
+          input.nextProbeAt,
+          input.auth,
+        );
+    },
+
+    providerStatuses(): Array<{
+      provider: string;
+      state: 'ready' | 'unavailable' | 'plan_blocked' | 'quota_cooldown' | 'disabled';
+      auth: 'verified' | 'unknown' | 'failed';
+      reason: string;
+      nextProbeAt: string | null;
+    }> {
+      return db.raw
+        .prepare('SELECT provider, detail, state, next_probe_at, auth_state FROM provider_status ORDER BY provider')
+        .all()
+        .map((r) => {
+          const row = r as {
+            provider: string;
+            detail: string | null;
+            state: 'ready' | 'unavailable' | 'plan_blocked' | 'quota_cooldown' | 'disabled' | null;
+            next_probe_at: string | null;
+            auth_state: 'verified' | 'unknown' | 'failed' | null;
+          };
+          return {
+            provider: row.provider,
+            state: row.state ?? 'unavailable',
+            auth: row.auth_state ?? 'unknown',
+            reason: row.detail ?? '',
+            nextProbeAt: row.next_probe_at,
+          };
+        });
+    },
+
     openEscalations(): Array<{ issueId: string; trigger: string; question: string }> {
       return db.raw
         .prepare('SELECT issue_id, trigger, question FROM human_escalations WHERE resolved = 0 ORDER BY id')
@@ -100,4 +159,3 @@ export function createSystemRepositories(db: ControllerDatabase) {
     },
   };
 }
-

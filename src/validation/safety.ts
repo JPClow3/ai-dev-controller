@@ -4,9 +4,9 @@
  * Validation commands are intentionally declared by the repository, but they
  * still execute with the controller's credentials.  A repository contract is
  * therefore not a permission grant: commands are screened immediately before
- * they are handed to the shell.  The policy is a deny-list because validation
- * commands are open-ended (npm, pytest, cargo, make, and so on), while the
- * operations the controller must never perform are finite and explicit.
+ * they are executed. Commands have a deliberately small argv-only shape; the
+ * controller never hands repository configuration to a shell. The operation
+ * checks below remain defence in depth for commands whose intent is unsafe.
  */
 
 export const DEFAULT_FORBIDDEN_OPERATIONS = [
@@ -32,6 +32,75 @@ export class ValidationSafetyError extends Error {
     super(`Refused unsafe validation command (${violation.operation}): ${violation.reason}`);
     this.name = 'ValidationSafetyError';
   }
+}
+
+export interface SafeValidationCommand {
+  file: string;
+  args: string[];
+}
+
+const ALLOWED_VALIDATION_EXECUTABLES = new Set([
+  'npm', 'npm.cmd', 'pnpm', 'pnpm.cmd', 'yarn', 'yarn.cmd',
+  'node', 'node.exe',
+  'python', 'python.exe', 'python3', 'python3.exe', 'py', 'py.exe',
+  'pytest', 'pytest.exe', 'ruff', 'ruff.exe',
+  'tsc', 'tsc.cmd', 'vitest', 'vitest.cmd', 'eslint', 'eslint.cmd',
+  'biome', 'biome.exe', 'oxlint', 'oxlint.exe',
+  'cargo', 'cargo.exe', 'go', 'go.exe', 'dotnet', 'dotnet.exe',
+  'mvn', 'mvn.cmd', 'gradle', 'gradle.bat', 'gradlew', 'gradlew.bat',
+  'php', 'php.exe', 'composer', 'composer.bat', 'ruby', 'ruby.exe', 'bundle', 'bundle.bat',
+]);
+
+/**
+ * Parses the narrow command language accepted from a repository contract.
+ *
+ * Quotes only group an argv value; they never gain shell semantics. Rejecting
+ * shell control syntax makes `git" "push`, backticks, `$()` and appended
+ * statements fail closed even if a future forbidden-operation matcher misses
+ * one of them.
+ */
+export function parseSafeValidationCommand(command: string): SafeValidationCommand | null {
+  if (!command.trim() || /[\r\n;&|<>`$(){}]/.test(command)) return null;
+
+  const args: string[] = [];
+  let token = '';
+  let quote: 'single' | 'double' | null = null;
+  let tokenStarted = false;
+
+  for (const character of command) {
+    if (quote === 'single') {
+      if (character === "'") quote = null;
+      else token += character;
+      continue;
+    }
+    if (quote === 'double') {
+      if (character === '"') quote = null;
+      else token += character;
+      continue;
+    }
+    if (character === "'") {
+      quote = 'single';
+      tokenStarted = true;
+    } else if (character === '"') {
+      quote = 'double';
+      tokenStarted = true;
+    } else if (/\s/.test(character)) {
+      if (tokenStarted) {
+        args.push(token);
+        token = '';
+        tokenStarted = false;
+      }
+    } else {
+      token += character;
+      tokenStarted = true;
+    }
+  }
+  if (quote !== null || !tokenStarted) return null;
+  args.push(token);
+
+  const [file, ...argv] = args;
+  if (!file || !ALLOWED_VALIDATION_EXECUTABLES.has(file.toLowerCase())) return null;
+  return { file, args: argv };
 }
 
 function escaped(value: string): string {
@@ -149,13 +218,24 @@ export function createValidationSafetyPolicy(
         };
       }
 
+      const parsed = parseSafeValidationCommand(command);
+      // Quoting can be meaningful for an argument (for example a test name),
+      // but it must not be able to split a forbidden operation into pieces.
+      // Check the original spelling and the argv-normalised spelling.
+      const normalised = parsed ? [parsed.file, ...parsed.args].join(' ') : command;
       for (const operation of operations) {
-        if (matchesKnownOperation(operation, command)) {
+        if (matchesKnownOperation(operation, command) || matchesKnownOperation(operation, normalised)) {
           return {
             operation,
             reason: `command matches the ${operation} safety boundary`,
           };
         }
+      }
+      if (!parsed) {
+        return {
+          operation: 'validation_command_not_allowed',
+          reason: 'command must use an approved validation executable with argv-only arguments',
+        };
       }
       return null;
     },

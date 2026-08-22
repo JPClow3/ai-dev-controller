@@ -104,7 +104,7 @@ describe('dependencies still gate on merge', () => {
   });
 
   it('releases it once the blocker PR is merged', async () => {
-    const report = await runSchedulerTick(
+    await runSchedulerTick(
       deps({
         fetchReadyIssues: vi.fn(async () => [issue('UNI-2', { blockedBy: ['UNI-1'] })]),
         syncMergedPullRequests: vi.fn(async () => ['UNI-1']),
@@ -247,5 +247,24 @@ describe('loop cancellation', () => {
 
     await expect(loop).resolves.toHaveLength(1);
     expect(process.listenerCount('SIGINT')).toBe(before);
+  });
+
+  it('waits for an in-flight tick before resolving an abort', async () => {
+    const controller = new AbortController();
+    let finishTick: (() => void) | undefined;
+    const reconcile = vi.fn(() => new Promise<number>((resolve) => {
+      finishTick = () => resolve(0);
+    }));
+    const loop = runLoop(deps({ reconcile }), { intervalMs: 60_000, signal: controller.signal });
+
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledOnce());
+    controller.abort();
+    let settled = false;
+    void loop.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    finishTick?.();
+    await expect(loop).resolves.toHaveLength(1);
   });
 });

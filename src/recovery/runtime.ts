@@ -1,6 +1,6 @@
 import type { ControllerRepositories } from '../state/repositories.js';
 import type { RunRecord } from '../state/types.js';
-import type { CiTrigger } from '../workflow/states.js';
+import type { CiTrigger } from '../domain/workflow.js';
 import { canRecoverAuthoritatively } from '../workflow/transitions.js';
 import {
   applicable,

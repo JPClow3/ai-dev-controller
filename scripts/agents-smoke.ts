@@ -1,8 +1,8 @@
 import 'dotenv/config';
-import { loadControllerConfig } from '../config/load-config.js';
-import { createInvoker } from './invoke.js';
-import { codexTransport } from './codex-profiles.js';
-import { StructuredInvocationError } from './types.js';
+import { loadControllerConfig } from '../src/config/load-config.js';
+import { createInvoker } from '../src/agents/invoke.js';
+import { codexTransport } from '../src/agents/codex-profiles.js';
+import { StructuredInvocationError } from '../src/agents/types.js';
 
 /**
  * End-to-end smoke test of the model invocation path against a real model.
@@ -11,7 +11,7 @@ import { StructuredInvocationError } from './types.js';
  * Uses whichever alias is passed (default `luna_low`, the cheapest tier) so
  * the wiring is proven for a handful of tokens.
  *
- *   pnpm tsx src/agents/smoke.ts [alias]
+ *   pnpm smoke:agent [alias]
  */
 const ROOT = process.cwd();
 const alias = process.argv[2] ?? 'luna_low';
@@ -96,4 +96,7 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+void main().catch((err: unknown) => {
+  console.error(`FAILED  ${(err as Error).message}`);
+  process.exitCode = 1;
+});

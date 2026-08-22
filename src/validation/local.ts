@@ -6,6 +6,7 @@ import { summarise, tail, type CommandOutcome, type ValidationCommand, type Vali
 import {
   createValidationSafetyPolicy,
   DEFAULT_FORBIDDEN_OPERATIONS,
+  parseSafeValidationCommand,
   type ForbiddenOperation,
 } from './safety.js';
 
@@ -209,8 +210,12 @@ export interface RunnerDeps {
 }
 
 const defaultExec: NonNullable<RunnerDeps['exec']> = async (command, cwd, timeoutMs) => {
+  const parsed = parseSafeValidationCommand(command);
+  if (!parsed) {
+    throw new Error('Refused to execute a validation command outside the argv-only safety policy.');
+  }
   try {
-    const result = await execa(command, { cwd, shell: true, timeout: timeoutMs, reject: false });
+    const result = await execa(parsed.file, parsed.args, { cwd, timeout: timeoutMs, reject: false });
     return {
       exitCode: result.exitCode ?? 1,
       stdout: result.stdout ?? '',

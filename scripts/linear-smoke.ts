@@ -1,12 +1,12 @@
 import 'dotenv/config';
-import { getLinearClient } from './client.js';
-import { listIssuesByLabel } from './issues.js';
-import { AI_LIFECYCLE_LABELS } from '../workflow/states.js';
+import { getLinearClient } from '../src/linear/client.js';
+import { listIssuesByLabel } from '../src/linear/issues.js';
+import { AI_LIFECYCLE_LABELS } from '../src/domain/workflow.js';
 
 /**
  * Verifies the Linear credential and that the lifecycle labels exist.
  *
- *   pnpm tsx src/linear/smoke.ts
+ *   pnpm smoke:linear
  */
 async function main(): Promise<void> {
   const client = getLinearClient();

@@ -1,17 +1,17 @@
 import 'dotenv/config';
-import { loadControllerConfig } from '../config/load-config.js';
-import { createInvoker } from './invoke.js';
-import { codexTransport } from './codex-profiles.js';
-import { createAgents, reviewerCandidates } from './roles.js';
-import { StructuredInvocationError } from './types.js';
-import { overlappingOwnership } from '../git/integration.js';
-import { assessReview, type ReviewResult } from '../reviews/review.js';
+import { loadControllerConfig } from '../src/config/load-config.js';
+import { createInvoker } from '../src/agents/invoke.js';
+import { codexTransport } from '../src/agents/codex-profiles.js';
+import { createAgents, reviewerCandidates } from '../src/agents/roles.js';
+import { StructuredInvocationError } from '../src/agents/types.js';
+import { overlappingOwnership } from '../src/git/integration.js';
+import { assessReview, type ReviewResult } from '../src/reviews/review.js';
 
 /**
  * Exercises curator -> planner -> reviewer against a real model, through the
  * same roles/invoker path the orchestrator uses.
  *
- *   pnpm tsx src/agents/pipeline-smoke.ts [alias]
+ *   pnpm smoke:pipeline [alias]
  *
  * Proves the wiring, not the model: a model failing a schema is a legitimate
  * outcome, because it still demonstrates that invalid output is caught
@@ -133,4 +133,7 @@ async function main(): Promise<void> {
   process.exitCode = failures === 0 ? 0 : 1;
 }
 
-void main();
+void main().catch((err: unknown) => {
+  console.error(`FAILED  ${(err as Error).message}`);
+  process.exitCode = 1;
+});

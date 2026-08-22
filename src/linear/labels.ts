@@ -1,5 +1,5 @@
-import type { AiLifecycleLabel } from '../workflow/states.js';
-import { AI_LIFECYCLE_LABELS } from '../workflow/states.js';
+import type { AiLifecycleLabel } from '../domain/workflow.js';
+import { AI_LIFECYCLE_LABELS } from '../domain/workflow.js';
 import { getLinearClient } from './client.js';
 import { drainConnection } from './pagination.js';
 

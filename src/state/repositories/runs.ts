@@ -6,7 +6,7 @@ import {
   canRecoverAuthoritatively,
   type TransitionEvidence,
 } from '../../workflow/transitions.js';
-import { isTerminal, type WorkflowState } from '../../workflow/states.js';
+import { isTerminal, type WorkflowState } from '../../domain/workflow.js';
 
 const ACTIVE_CLAUSE = `state NOT IN ('MERGED','FAILED','CANCELLED')`;
 
@@ -216,4 +216,3 @@ export function createRunRepositories(db: ControllerDatabase) {
     },
   };
 }
-

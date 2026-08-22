@@ -29,6 +29,45 @@ describe('CLI command surface through child processes', () => {
     });
   }
 
+  it('registers every operational command with Commander', { timeout: 60_000 }, async () => {
+    const commands = [
+      'config', 'projects', 'status', 'inspect', 'routes', 'metrics', 'providers', 'usage', 'ui',
+      'pause', 'resume', 'retry', 'onboard', 'recover', 'doctor', 'run', 'migrate',
+    ];
+    const results = await Promise.all(commands.map((command) => cli(command, '--help')));
+
+    for (const [index, result] of results.entries()) {
+      expect(result.stdout).toContain(`Usage: ai-dev ${commands[index]}`);
+    }
+  });
+
+  it('reports configuration and empty controller state without contacting providers', { timeout: 60_000 }, async () => {
+    const databasePath = resolve(fixtureRoot, 'data/controller.db');
+    const db = openDatabase(databasePath);
+    db.close();
+    const [configResult, projects, status, inspect, metrics, usage, retry, recover] = await Promise.all([
+      cli('config', '--json'),
+      cli('projects'),
+      cli('status', '--json'),
+      cli('inspect', 'MISSING-1'),
+      cli('metrics'),
+      cli('usage', '--json'),
+      cli('retry', 'MISSING-1'),
+      cli('recover'),
+    ]);
+    const config = JSON.parse(configResult.stdout) as {
+      global: { concurrency: { activeIssues: number } };
+    };
+    expect(config.global.concurrency.activeIssues).toBeGreaterThan(0);
+    expect(projects.stdout).toContain('portfolio');
+    expect(JSON.parse(status.stdout)).toEqual({ runs: [], escalations: [] });
+    expect(inspect.stdout).toContain('No active run for MISSING-1.');
+    expect(metrics.stdout).toContain('No samples yet.');
+    expect(JSON.parse(usage.stdout)).toEqual({ summary: [], history: [] });
+    expect(retry.stdout).toContain('No active run for MISSING-1.');
+    expect(recover.stdout).toContain('No incomplete runs.');
+  });
+
   it('migrates, mutates operator state, and reports it from separate processes', { timeout: 60_000 }, async () => {
     const migrated = await cli('migrate');
     expect(migrated.stdout).toContain('data/controller.db ready');

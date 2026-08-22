@@ -1,0 +1,39 @@
+# Provider connections. Each key is the provider id used by routing aliases.
+# A provider may be reachable through several transports; the transport field
+# selects the one the controller uses for structured calls.
+#
+# `enabled: false` keeps the provider declared (so aliases validate and the TUI
+# can show it) but removes it from routing and probing.
+providers:
+  chatgpt:
+    transport: codex-cli
+    display_name: ChatGPT (Codex)
+    bin: codex
+
+  commandcode:
+    transport: command-code-cli
+    display_name: Command Code
+    bin: command-code
+    # Command Code's plan is not readable headlessly. Set this to the plan you
+    # are on (go, goat, pro, max) so the model catalog can flag models above
+    # your plan in the TUI and in `ai-dev providers`.
+    plan: go
+    monthly_token_limit: null
+
+  zai:
+    transport: openai-compatible-http
+    display_name: Z.AI
+    base_url: https://api.z.ai/api/paas/v4
+    api_key_env: ZAI_API_KEY
+    monthly_token_limit: null
+
+  opencode:
+    transport: opencode-cli
+    display_name: OpenCode
+    bin: opencode
+    enabled: false
+
+  cline_pass:
+    transport: manual
+    display_name: Cline Pass
+    enabled: false

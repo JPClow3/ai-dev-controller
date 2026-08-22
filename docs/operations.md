@@ -20,6 +20,23 @@ probe. `pnpm supervisor:status` verifies the Windows current-user supervisor;
 the task owns the long-running polling process and starts it again after an
 unexpected exit.
 
+## Provider readiness and failover
+
+```powershell
+pnpm cli providers
+pnpm cli providers --json
+pnpm cli ui
+```
+
+The router selects only `ready` aliases: their transport is constructed, the
+model is allowed by its provider plan, and the provider is not disabled or in a
+cooldown. `verified` means a non-billing probe confirmed authentication;
+`unknown` means credentials are configured but not proven without a model call.
+An unavailable provider is removed from routing while healthy providers keep
+working. If none are ready, active runs remain resumable and new work is
+throttled until the next successful health refresh. `COMMAND_CODE_BIN` must be
+`command-code` or an explicit path—never bare `cmd` on Windows.
+
 For an attended one-off loop instead of the supervisor:
 
 ```powershell
@@ -115,4 +132,3 @@ git tag -a v0.1.0 -m "Release v0.1.0: Controller orchestration and Luna-heavy ro
 # Push tag to remote origin
 git push origin v0.1.0
 ```
-

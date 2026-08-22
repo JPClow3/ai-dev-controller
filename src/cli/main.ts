@@ -5,12 +5,19 @@ import pc from 'picocolors';
 import { execa } from 'execa';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { emitKeypressEvents } from 'node:readline';
+import { stdin, stdout } from 'node:process';
 import { loadControllerConfig } from '../config/load-config.js';
 import { openDatabase } from '../state/db.js';
 import { acquireControllerLock } from '../state/lock.js';
 import { createRepositories } from '../state/repositories.js';
-import { defaultPressure, pressureFromOrca } from '../routing/pressure.js';
+import { defaultPressure, pressureFromOrca, pressureFromProviderProbes } from '../routing/pressure.js';
 import { refreshRuntimePressure } from '../routing/quota.js';
+import { probeProviders } from '../providers/probe.js';
+import { buildProviderEligibility } from '../providers/runtime.js';
+import { buildTransports } from '../agents/transports.js';
+import { buildSnapshot } from '../tui/snapshot.js';
+import { renderDashboard } from '../tui/render.js';
 import { createOrcaClient, status as orcaStatus } from '../orca/client.js';
 import { planBootstrap } from '../knowledge/bootstrap.js';
 import { openBootstrapPullRequest } from '../knowledge/bootstrap-pr.js';
@@ -21,6 +28,7 @@ import { buildController } from '../workflow/wire.js';
 import { runLoop } from '../workflow/runner.js';
 import { assertLifecycleLabelsExist } from '../linear/labels.js';
 import { remediationBudgetExhausted } from '../config/escalation-schema.js';
+import { configurePersistentLogging } from '../util/log.js';
 
 /**
  * Operational escape hatch, not a daily tool. The normal loop is
@@ -234,6 +242,111 @@ program
   );
 
 program
+  .command('providers')
+  .description('connected AI providers and their probe status')
+  .option('--json', 'machine-readable output')
+  .action(async (opts: { json?: boolean }) => {
+    const config = loadControllerConfig(ROOT);
+    const probes = await probeProviders({ providers: config.providers });
+    const transportBuild = buildTransports({ providers: config.providers });
+    const eligibility = buildProviderEligibility({
+      providers: config.providers,
+      routing: config.routing,
+      pressure: defaultPressure(config.routing),
+      probes,
+      unavailableTransports: transportBuild.unavailable,
+      env: process.env,
+    });
+    if (opts.json) {
+      return void console.log(JSON.stringify(
+        { providers: config.providers.providers, probes, eligibility },
+        null,
+        2,
+      ));
+    }
+    for (const probe of probes) {
+      const spec = config.providers.providers[probe.provider as keyof typeof config.providers.providers];
+      const runtime = eligibility.providers[probe.provider];
+      const flag = runtime?.state === 'ready' ? pc.green('ok  ') : pc.red('FAIL');
+      console.log(`${flag} ${probe.provider.padEnd(14)} ${spec?.transport.padEnd(24) ?? ''} ${runtime?.state ?? 'unavailable'} ${runtime?.auth ?? 'failed'} ${pc.dim(runtime?.reason ?? probe.detail)}`);
+    }
+  });
+
+program
+  .command('usage')
+  .description('token usage by provider and recent history')
+  .option('--json', 'machine-readable output')
+  .action((opts: { json?: boolean }) =>
+    withDb(({ repos }) => {
+      const summary = repos.usageSummaryByProvider();
+      const history = repos.usageHistory();
+      if (opts.json) {
+        return void console.log(JSON.stringify({ summary, history }, null, 2));
+      }
+      console.log('provider      calls   input      output');
+      for (const row of summary) {
+        console.log(
+          `${row.provider.padEnd(13)} ${String(row.calls).padEnd(7)} ${String(row.inputTokens).padEnd(10)} ${String(row.outputTokens)}`,
+        );
+      }
+      if (history.length === 0) console.log(pc.dim('\nNo usage recorded yet.'));
+    }),
+  );
+
+program
+  .command('ui')
+  .description('live provider and usage dashboard')
+  .action(async () => {
+    const config = loadControllerConfig(ROOT);
+    const db = openDatabase(config.global.paths.database);
+    const repos = createRepositories(db);
+    const refresh = async () => {
+      const probes = await probeProviders({ providers: config.providers });
+      const pressures = defaultPressure(config.routing);
+      refreshRuntimePressure(
+        pressures,
+        config.routing,
+        repos.activeProviderPressures(),
+        [],
+        pressureFromProviderProbes(probes),
+      );
+      return buildSnapshot({
+        providerConfigs: config.providers.providers,
+        probes,
+        pressures,
+        usage: repos.usageSummaryByProvider(),
+        usageHistory: repos.usageHistory(),
+        routing: config.routing,
+        eligibility: buildProviderEligibility({
+          providers: config.providers,
+          routing: config.routing,
+          pressure: pressures,
+          probes,
+          unavailableTransports: buildTransports({ providers: config.providers }).unavailable,
+          persisted: repos.providerStatuses(),
+          env: process.env,
+        }),
+      });
+    };
+
+    stdout.write(renderDashboard(await refresh()));
+    if (stdin.isTTY) {
+      emitKeypressEvents(stdin);
+      stdin.setRawMode(true);
+      stdin.on('keypress', async (_str, key) => {
+        if (key.name === 'q') {
+          stdin.setRawMode(false);
+          db.close();
+          process.exit(0);
+        }
+        if (key.name === 'r') stdout.write(renderDashboard(await refresh()));
+      });
+    } else {
+      db.close();
+    }
+  });
+
+program
   .command('pause <issue>')
   .description('stop scheduling work for an issue')
   .action((issue: string) =>
@@ -337,6 +450,7 @@ program
   .option('--apply', 'apply the reconciliation instead of reporting it')
   .action(async (opts: { apply?: boolean }) => {
     const config = loadControllerConfig(ROOT);
+    configurePersistentLogging({ directory: join(ROOT, 'logs') });
     let release: (() => void) | undefined;
     if (opts.apply) {
       try {
@@ -405,6 +519,25 @@ program
     // discover from the inside.
     for (const [name, ok, detail] of await codexChecks(config)) checks.push([name, ok, detail]);
 
+    // New providers are cheap probes, not full model calls. Command Code's
+    // `status` and the Z.AI key presence check give the same "reachable?" truth
+    // the Codex probe does for ChatGPT.
+    const probes = await probeProviders({ providers: config.providers });
+    const transportBuild = buildTransports({ providers: config.providers });
+    const eligibility = buildProviderEligibility({
+      providers: config.providers,
+      routing: config.routing,
+      pressure: defaultPressure(config.routing),
+      probes,
+      unavailableTransports: transportBuild.unavailable,
+      env: process.env,
+    });
+    for (const probe of probes) {
+      if (probe.provider === 'chatgpt') continue;
+      const runtime = eligibility.providers[probe.provider];
+      checks.push([probe.provider, runtime?.state === 'ready', `${runtime?.state ?? 'unavailable'}: ${runtime?.reason ?? probe.detail}`]);
+    }
+
     for (const [name, ok, detail] of checks) {
       console.log(`${ok ? pc.green('ok  ') : pc.red('FAIL')} ${name.padEnd(18)} ${pc.dim(detail)}`);
     }
@@ -418,6 +551,7 @@ program
   .option('--dry-run', 'never write to Linear')
   .action(async (opts: { once?: boolean; dryRun?: boolean }) => {
     const config = loadControllerConfig(ROOT);
+    configurePersistentLogging({ directory: join(ROOT, 'logs') });
 
     try {
       await assertLifecycleLabelsExist();
@@ -470,4 +604,7 @@ program
     }),
   );
 
-await program.parseAsync();
+await program.parseAsync().catch((err: unknown) => {
+  console.error(pc.red((err as Error).message));
+  process.exitCode = 1;
+});

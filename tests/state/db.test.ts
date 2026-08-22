@@ -159,6 +159,25 @@ describe('worker attempt budget', () => {
     repos.setTaskState(run.id, 'api', 'DONE');
     expect(repos.activeWorkerCount()).toBe(0);
   });
+
+  it('persists provider runtime status without storing credentials', () => {
+    repos.setProviderStatus({
+      provider: 'zai',
+      state: 'unavailable',
+      auth: 'failed',
+      reason: 'missing ZAI_API_KEY',
+      nextProbeAt: '2026-08-20T12:00:00.000Z',
+    });
+    expect(repos.providerStatuses()).toEqual([
+      {
+        provider: 'zai',
+        state: 'unavailable',
+        auth: 'failed',
+        reason: 'missing ZAI_API_KEY',
+        nextProbeAt: '2026-08-20T12:00:00.000Z',
+      },
+    ]);
+  });
 });
 
 describe('curated issue contract', () => {

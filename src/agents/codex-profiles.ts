@@ -1,5 +1,5 @@
 import { execa } from 'execa';
-import { ProviderQuotaExhaustedError, quotaResetAtFromOutput } from '../routing/quota.js';
+import { ProviderQuotaExhaustedError, ProviderUnavailableError, quotaResetAtFromOutput } from '../routing/quota.js';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,10 +34,10 @@ export function codexTransport(bin = process.env['CODEX_BIN'] ?? 'codex'): Struc
       const messagePath = join(dir, 'last-message.txt');
       const schemaPath = join(dir, 'schema.json');
 
-      const args = [
+      const args: string[] = [
         'exec',
         '--profile',
-        alias.profile,
+        alias.profile ?? '',
         '--sandbox',
         'read-only',
         // Same reason as the worker launcher: the "elevated" Windows sandbox
@@ -84,7 +84,7 @@ export function codexTransport(bin = process.env['CODEX_BIN'] ?? 'codex'): Struc
       } catch (err) {
         const e = err as { timedOut?: boolean; stderr?: string; stdout?: string; message?: string };
         if (e.timedOut) {
-          throw new Error(`codex exec --profile ${alias.profile} timed out after ${timeoutMs}ms`);
+          throw new ProviderUnavailableError(alias.provider, `profile ${alias.profile} timed out after ${timeoutMs}ms`);
         }
         const detail = `${e.stderr ?? ''}\n${e.stdout ?? ''}`;
         if (/rate limit|quota|usage limit|429/i.test(detail)) {
@@ -95,12 +95,13 @@ export function codexTransport(bin = process.env['CODEX_BIN'] ?? 'codex'): Struc
           );
         }
         if (/legacy `profile`|cannot be used while/i.test(detail)) {
-          throw new Error(
-            `Codex profile "${alias.profile}" is in the legacy config.toml format. ` +
-              `Move it to ~/.codex/${alias.profile}.config.toml.`,
+          throw new ProviderUnavailableError(
+            alias.provider,
+            `profile ${alias.profile} is in the legacy config.toml format; move it to ~/.codex/${alias.profile}.config.toml`,
+            15 * 60_000,
           );
         }
-        throw new Error(`codex exec --profile ${alias.profile} failed: ${detail.trim().slice(0, 400)}`);
+        throw new ProviderUnavailableError(alias.provider, `profile ${alias.profile} failed: ${detail.trim().slice(0, 400)}`);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

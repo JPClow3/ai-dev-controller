@@ -15,6 +15,7 @@ import { summarise } from '../../src/validation/result.js';
 import {
   assertSafeValidationCommand,
   createValidationSafetyPolicy,
+  parseSafeValidationCommand,
   ValidationSafetyError,
 } from '../../src/validation/safety.js';
 import { deriveProject, renderProjectYaml, detectCiTrigger } from '../../src/knowledge/derive.js';
@@ -202,6 +203,30 @@ describe('validation is evidence, not opinion', () => {
     expect(exec).not.toHaveBeenCalled();
     expect(summary.results[0]?.safetyViolation).toBe('validation_command_empty');
     expect(summary.passed).toBe(false);
+  });
+
+  it.each([
+    'git" "push --force origin main',
+    'pnpm test; git push origin main',
+    'pnpm test `git push origin main`',
+    'pnpm test $(git push origin main)',
+  ])('rejects shell evasions before execution: %s', async (command) => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false }));
+    const summary = await runRequiredValidation('/repo', [{ name: 'unsafe', command, required: true }], { exec });
+    expect(exec).not.toHaveBeenCalled();
+    expect(summary.results[0]?.safetyViolation).toBe('validation_command_not_allowed');
+  });
+
+  it('parses quoted arguments as argv, without retaining shell syntax', () => {
+    expect(parseSafeValidationCommand("pnpm test -- --grep 'critical path'")).toEqual({
+      file: 'pnpm',
+      args: ['test', '--', '--grep', 'critical path'],
+    });
+  });
+
+  it('applies operation checks to the dequoted argv form', () => {
+    const policy = createValidationSafetyPolicy(['production_deployment']);
+    expect(policy.violation('npm run de"pl"oy')?.operation).toBe('production_deployment');
   });
 });
 

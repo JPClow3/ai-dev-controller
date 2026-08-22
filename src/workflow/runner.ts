@@ -4,7 +4,7 @@ import { computeReadyWave, detectDependencyCycles, type SchedulableIssue } from 
 import { availableCapacity, shouldThrottleNewWork, type CapacityState } from '../scheduler/capacity.js';
 import { rankWork, filterUnderThrottle, type WorkItem } from '../scheduler/priority.js';
 import { resolveRepository } from '../projects/resolver.js';
-import { logger } from '../util/log.js';
+import { logger, newCorrelationId, withLogContext } from '../util/log.js';
 
 const log = logger('runner');
 
@@ -253,43 +253,62 @@ export async function runLoop(deps: RunnerDeps, options: LoopOptions = {}): Prom
   const intervalMs = options.intervalMs ?? deps.config.global.pollIntervalSeconds * 1000;
   const reports: TickReport[] = [];
   let running = false;
+  let activeTick: Promise<void> | null = null;
 
   if (options.signal?.aborted) return reports;
 
-  const tick = async (): Promise<void> => {
+  const tick = (): Promise<void> => {
     if (running) {
       log.warn('previous tick still running; skipping this interval');
-      return;
+      return activeTick ?? Promise.resolve();
     }
     running = true;
-    try {
-      const report = await runSchedulerTick(deps);
+    const work = (async () => {
+      try {
+      const report = await withLogContext({ correlationId: newCorrelationId() }, () => runSchedulerTick(deps));
       reports.push(report);
       log.info(
         `tick: ${report.adopted} adopted, ${report.curated} curated, ${report.dispatched.length} dispatched, ` +
           `${report.readyIssues.length} ready, ` +
           `${report.blockedIssues.length} blocked${report.throttled ? ', THROTTLED' : ''}`,
       );
-    } catch (err) {
-      log.error('tick failed', err);
-    } finally {
-      running = false;
-    }
+      } catch (err) {
+        log.error('tick failed', err);
+      } finally {
+        running = false;
+      }
+    })();
+    activeTick = work;
+    void work.finally(() => {
+      if (activeTick === work) activeTick = null;
+    });
+    return work;
   };
 
-  await tick();
-  if (options.once || options.signal?.aborted) return reports;
-
   return new Promise((resolve) => {
-    const timer = setInterval(() => void tick(), intervalMs);
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let stopping = false;
     const stop = () => {
-      clearInterval(timer);
+      if (stopping) return;
+      stopping = true;
+      if (timer) clearInterval(timer);
       options.signal?.removeEventListener('abort', stop);
       process.removeListener('SIGINT', stop);
-      resolve(reports);
+      // Do not allow the caller to close SQLite until all work that already
+      // entered the tick has finished writing its durable state.
+      void (activeTick ?? Promise.resolve()).finally(() => resolve(reports));
     };
     options.signal?.addEventListener('abort', stop, { once: true });
     process.once('SIGINT', stop);
+
+    void (async () => {
+      await tick();
+      if (options.once || options.signal?.aborted) {
+        stop();
+        return;
+      }
+      if (!stopping) timer = setInterval(() => void tick(), intervalMs);
+    })();
   });
 }
 

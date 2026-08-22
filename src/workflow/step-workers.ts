@@ -11,6 +11,8 @@ import {
   WORKER_EXIT_FILE,
   WORKER_RESULT_FILE,
   WORKER_HEARTBEAT_FILE,
+  WORKER_PROCESS_FILE,
+  workerProcessIsAlive,
 } from '../orca/terminals.js';
 import { createWorkerWorktree, findWorkerWorktree, listWorktrees, worktreePathFromId } from '../orca/worktrees.js';
 import {
@@ -167,12 +169,15 @@ export function createWorkerStepHandlers(env: WorkerStepEnvironment): WorkerStep
     const controlDir = env.workerControlDir(ctx, task.id);
     mkdirSync(controlDir, { recursive: true });
     const heartbeatPath = join(controlDir, WORKER_HEARTBEAT_FILE);
+    const processPath = join(controlDir, WORKER_PROCESS_FILE);
     const recentHeartbeat = existsSync(heartbeatPath)
       && classifyWorkerLiveness(null, statSync(heartbeatPath).mtimeMs).state === 'running';
+    const processAlive = existsSync(processPath)
+      && workerProcessIsAlive(readFileSync(processPath, 'utf8'));
     const terminalTitle = workerTerminalTitle(task.id, attemptNo);
     const terminalExists = resumingDispatch
       && (await listTerminals(orca, `id:${worktree.id}`)).some((terminal) => terminal.title === terminalTitle);
-    if (shouldWaitForExistingWorkerLaunch({ resumingDispatch, recentHeartbeat, terminalExists })) {
+    if (shouldWaitForExistingWorkerLaunch({ resumingDispatch, recentHeartbeat, terminalExists, processAlive })) {
       // Either the worker process wrote its heartbeat or Orca confirms that
       // the deterministic terminal was created before the controller crashed.
       repos.markWorkerLaunched(ctx.run.id, task.id);
@@ -181,7 +186,7 @@ export function createWorkerStepHandlers(env: WorkerStepEnvironment): WorkerStep
     // A retried task reuses its controller-owned control directory. Old
     // sentinels would otherwise make the replacement look finished before it
     // starts.
-    for (const stale of [WORKER_EXIT_FILE, WORKER_RESULT_FILE, WORKER_HEARTBEAT_FILE]) {
+    for (const stale of [WORKER_EXIT_FILE, WORKER_RESULT_FILE, WORKER_HEARTBEAT_FILE, WORKER_PROCESS_FILE]) {
       rmSync(join(controlDir, stale), { force: true });
     }
     writeFileSync(join(controlDir, WORKER_PROMPT_FILE), workerPrompt(ctx, task), 'utf8');
@@ -191,11 +196,10 @@ export function createWorkerStepHandlers(env: WorkerStepEnvironment): WorkerStep
     // Setup runs before the Codex sandbox starts, with the controller's own
     // credentials. It must cross the same policy boundary as validation.
     assertSafeWorkerSetup(setup?.command, config.global.safety.forbiddenOperations);
+    const workerOptions = setup?.command ? { setupCommand: setup.command } : {};
     writeFileSync(
       join(controlDir, WORKER_SCRIPT_FILE),
-      workerScript(profile, controlDir, {
-        ...(setup?.command ? { setupCommand: setup.command } : {}),
-      }),
+      workerScript(profile, controlDir, workerOptions),
       'utf8',
     );
     await launchWorker(orca, {
@@ -231,17 +235,15 @@ export function createWorkerStepHandlers(env: WorkerStepEnvironment): WorkerStep
   ): Promise<void> {
     const run = (args: string[]) => wiring.gitRunner(workerPath, args);
 
-    const dirty = await run(['status', '--porcelain']).catch(() => '');
+    const dirty = await run(['status', '--porcelain']);
     if (!dirty.trim()) return;
     if (task.owns.length === 0) {
       log.warn(`${ctx.run.issueId}/${task.id}: uncommitted changes but no declared ownership; leaving them`);
       return;
     }
-    await run(['add', '--', ...task.owns]).catch((err: unknown) => {
-      log.warn(`${ctx.run.issueId}/${task.id}: could not stage owned paths`, (err as Error).message);
-    });
+    await run(['add', '--', ...task.owns]);
 
-    const staged = await run(['diff', '--cached', '--name-only']).catch(() => '');
+    const staged = await run(['diff', '--cached', '--name-only']);
     if (!staged.trim()) {
       log.warn(`${ctx.run.issueId}/${task.id}: changes exist but none inside ${task.owns.join(', ')}`);
       return;
@@ -260,7 +262,7 @@ export function createWorkerStepHandlers(env: WorkerStepEnvironment): WorkerStep
     await run(['commit', '-m', message]);
     log.info(`${ctx.run.issueId}/${task.id}: committed ${staged.split('\n').filter(Boolean).length} owned file(s)`);
 
-    const leftover = await run(['status', '--porcelain']).catch(() => '');
+    const leftover = await run(['status', '--porcelain']);
     const outside = leftover
       .split('\n')
       .map((line) => line.slice(3).trim())
@@ -282,10 +284,7 @@ export function createWorkerStepHandlers(env: WorkerStepEnvironment): WorkerStep
   ): Promise<Array<{ sha: string; message: string }>> {
     const baseSha = repos.latestWorkerAttempt(ctx.run.id, taskKey)?.baseSha ?? ctx.run.baseSha;
     if (!baseSha) return [];
-    const commits = await git.commitsSince(workerPath, baseSha).catch((err: unknown) => {
-      log.warn(`${ctx.run.issueId}/${taskKey}: could not read commits`, (err as Error).message);
-      return [] as Array<{ sha: string; message: string }>;
-    });
+    const commits = await git.commitsSince(workerPath, baseSha);
     const ordered = [...commits].reverse();
     repos.recordAttemptResult(ctx.run.id, taskKey, {
       commits: ordered,
@@ -392,10 +391,13 @@ export function createWorkerStepHandlers(env: WorkerStepEnvironment): WorkerStep
         const control = env.workerControlDir(ctx, task.id);
         const exitContents = env.readIfPresent(control, WORKER_EXIT_FILE) || null;
         const heartbeatPath = join(control, WORKER_HEARTBEAT_FILE);
+        const processPath = join(control, WORKER_PROCESS_FILE);
         const attempt = repos.latestWorkerAttempt(ctx.run.id, task.id);
         const launchConfirmedMs = attempt?.startedAt ? Date.parse(attempt.startedAt) : null;
         const heartbeatModifiedMs = existsSync(heartbeatPath) ? statSync(heartbeatPath).mtimeMs : launchConfirmedMs;
-        const liveness = classifyWorkerLiveness(exitContents, heartbeatModifiedMs);
+        const processAlive = existsSync(processPath)
+          && workerProcessIsAlive(readFileSync(processPath, 'utf8'));
+        const liveness = classifyWorkerLiveness(exitContents, heartbeatModifiedMs, Date.now(), undefined, processAlive);
         if (liveness.state === 'running') {
           pending += 1;
           continue;
@@ -413,12 +415,18 @@ export function createWorkerStepHandlers(env: WorkerStepEnvironment): WorkerStep
           interrupted.push(task.id);
           continue;
         }
-        await commitWorkerChanges(ctx, task, path, control).catch((err: unknown) => {
-          log.error(`${ctx.run.issueId}/${task.id}: could not commit`, (err as Error).message);
-        });
-        const commits = await harvestCommits(ctx, task.id, path, control);
-        repos.setTaskState(ctx.run.id, task.id, 'DONE');
-        log.info(`${ctx.run.issueId}/${task.id}: finished with ${commits.length} commit(s)`);
+        try {
+          await commitWorkerChanges(ctx, task, path, control);
+          const commits = await harvestCommits(ctx, task.id, path, control);
+          repos.setTaskState(ctx.run.id, task.id, 'DONE');
+          log.info(`${ctx.run.issueId}/${task.id}: finished with ${commits.length} commit(s)`);
+        } catch (err) {
+          log.error(`${ctx.run.issueId}/${task.id}: could not persist worker changes`, (err as Error).message);
+          repos.setTaskState(ctx.run.id, task.id, 'FAILED');
+          repos.recordAttemptResult(ctx.run.id, task.id, { failureClass: 'controller_git_failure', commits: [] });
+          interrupted.push(task.id);
+          continue;
+        }
       }
       return { allSettled: pending === 0, interrupted };
     },

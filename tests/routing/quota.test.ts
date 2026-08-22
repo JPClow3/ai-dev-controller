@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  applyProviderUnavailableCooldown,
   applyQuotaCooldown,
+  ProviderUnavailableError,
   ProviderQuotaExhaustedError,
   QUOTA_RECHECK_INTERVAL_MS,
   quotaResetAtFromOutput,
@@ -78,6 +80,21 @@ describe('Codex quota exhaustion', () => {
       'chatgpt',
       expect.objectContaining({ resetAt: resetAt.toISOString() }),
     );
+  });
+
+  it('persists a short cooldown for provider authentication or transport failures', () => {
+    const pressure = defaultPressure(routing);
+    const setProviderPressure = vi.fn();
+    const now = new Date('2026-08-09T02:40:00.000Z');
+    const retryAt = applyProviderUnavailableCooldown(
+      { setProviderPressure },
+      pressure,
+      new ProviderUnavailableError('zai', 'HTTP 401', 60_000),
+      now,
+    );
+
+    expect(retryAt).toEqual(new Date('2026-08-09T02:41:00.000Z'));
+    expect(pressure.zai).toMatchObject({ pressure: 'EXHAUSTED', source: 'transport_unavailable' });
   });
 
   it('restores a fresh map from durable cooldowns after a restart', () => {

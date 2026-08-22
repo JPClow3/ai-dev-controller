@@ -14,6 +14,19 @@ export class ProviderQuotaExhaustedError extends Error {
   }
 }
 
+/** A provider-wide failure that is not a quota event (auth, network, or configuration). */
+export class ProviderUnavailableError extends Error {
+  override readonly name = 'ProviderUnavailableError';
+
+  constructor(
+    readonly provider: string,
+    detail: string,
+    readonly retryAfterMs = 5 * 60_000,
+  ) {
+    super(`${provider} unavailable (${detail})`);
+  }
+}
+
 /**
  * Codex reports a human-readable local timestamp, for example
  * "try again at Aug 15th, 2026 7:14 PM". Normalise the ordinal before asking
@@ -31,6 +44,10 @@ export function quotaResetAtFromOutput(output: string): Date | null {
 
 export function isProviderQuotaExhausted(error: unknown): error is ProviderQuotaExhaustedError {
   return error instanceof ProviderQuotaExhaustedError;
+}
+
+export function isProviderUnavailable(error: unknown): error is ProviderUnavailableError {
+  return error instanceof ProviderUnavailableError;
 }
 
 /**
@@ -60,6 +77,26 @@ export function applyQuotaCooldown(
     pressure: 'EXHAUSTED' as const,
     remainingAllowance: 0,
     source: 'transport_quota',
+    manualOverride: false,
+    resetAt: resetAt.toISOString(),
+  };
+  store.setProviderPressure(error.provider, value);
+  pressure[error.provider] = { provider: error.provider, ...value };
+  return resetAt;
+}
+
+/** Persist non-quota provider failures so the next selector can fail over. */
+export function applyProviderUnavailableCooldown(
+  store: ProviderPressureStore,
+  pressure: PressureMap,
+  error: ProviderUnavailableError,
+  now = new Date(),
+): Date {
+  const resetAt = new Date(now.getTime() + error.retryAfterMs);
+  const value = {
+    pressure: 'EXHAUSTED' as const,
+    remainingAllowance: 0,
+    source: 'transport_unavailable',
     manualOverride: false,
     resetAt: resetAt.toISOString(),
   };

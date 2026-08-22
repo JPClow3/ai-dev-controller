@@ -1,4 +1,4 @@
-import type { WorkflowState, CiTrigger } from '../workflow/states.js';
+import type { WorkflowState, CiTrigger } from '../domain/workflow.js';
 import { isLegalTransition } from '../workflow/transitions.js';
 
 /**

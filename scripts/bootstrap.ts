@@ -1,11 +1,11 @@
 import 'dotenv/config';
-import { loadControllerConfig } from '../config/load-config.js';
-import { planBootstrap, applyBootstrap } from './bootstrap.js';
+import { loadControllerConfig } from '../src/config/load-config.js';
+import { planBootstrap, applyBootstrap } from '../src/knowledge/bootstrap.js';
 
 /**
  * Generates .ai-workflow/ for registered repositories.
  *
- *   pnpm tsx src/knowledge/bootstrap-cli.ts [--apply] [projectId ...]
+ *   pnpm bootstrap [--apply] [projectId ...]
  *
  * Dry-run by default: it prints what would be written, because this touches
  * nine repositories the user cares about and "map, do not move" is easier to

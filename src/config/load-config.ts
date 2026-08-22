@@ -6,6 +6,7 @@ import { globalConfigSchema, type GlobalConfig } from './schema.js';
 import { scoringConfigSchema, type ScoringConfig } from './scoring-schema.js';
 import { routingConfigSchema, type RoutingConfig } from './routing-schema.js';
 import { escalationConfigSchema, type EscalationConfig } from './escalation-schema.js';
+import { providersConfigSchema, type ProvidersConfig } from './providers-schema.js';
 import { projectRegistrySchema, type ProjectRegistry } from './registry-schema.js';
 
 export interface ControllerConfig {
@@ -15,6 +16,7 @@ export interface ControllerConfig {
   escalation: EscalationConfig;
   scoring: ScoringConfig;
   registry: ProjectRegistry;
+  providers: ProvidersConfig;
 }
 
 export interface LoadControllerConfigOptions {
@@ -186,10 +188,12 @@ export function loadControllerConfig(rootDir: string, options: LoadControllerCon
     ),
     scoring: parseWith(scoringConfigSchema, 'config/scoring.yaml', readYaml(rootDir, 'config/scoring.yaml')),
     registry: parseWith(projectRegistrySchema, 'projects/registry.yaml', mergedRegistry),
+    providers: parseWith(providersConfigSchema, 'config/providers.yaml', readYaml(rootDir, 'config/providers.yaml')),
   };
 }
 
 export type { GlobalConfig, RoutingConfig, EscalationConfig, ScoringConfig, ProjectRegistry };
+export type { ProvidersConfig, ProviderConfig } from './providers-schema.js';
 export type { ConcurrencyConfig } from './schema.js';
 export type { ModelAlias } from './routing-schema.js';
 export type { ScoreWeights } from './scoring-schema.js';

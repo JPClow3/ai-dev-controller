@@ -299,6 +299,38 @@ CREATE TABLE IF NOT EXISTS token_usage (
 CREATE INDEX IF NOT EXISTS ix_token_usage_alias ON token_usage(alias_id, role);
 `;
 
+/**
+ * Multi-provider attribution. `provider` defaults to chatgpt because every
+ * token_usage row that predates this migration was written by the Codex
+ * transport; `model` stays null for old rows because the alias no longer maps
+ * unambiguously.
+ */
+const TOKEN_USAGE_PROVIDER = `
+ALTER TABLE token_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'chatgpt';
+ALTER TABLE token_usage ADD COLUMN model TEXT;
+CREATE INDEX IF NOT EXISTS ix_token_usage_provider ON token_usage(provider, recorded_at);
+`;
+
+/** Last probe result, shown in the TUI without re-probing on every render. */
+const PROVIDER_STATUS = `
+CREATE TABLE IF NOT EXISTS provider_status (
+  provider      TEXT PRIMARY KEY,
+  connected     INTEGER NOT NULL DEFAULT 0,
+  auth_ok       INTEGER NOT NULL DEFAULT 0,
+  detail        TEXT,
+  probed_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
+const PROVIDER_STATUS_RUNTIME = `
+ALTER TABLE provider_status ADD COLUMN state TEXT NOT NULL DEFAULT 'unavailable';
+ALTER TABLE provider_status ADD COLUMN next_probe_at TEXT;
+`;
+
+const PROVIDER_STATUS_AUTH = `
+ALTER TABLE provider_status ADD COLUMN auth_state TEXT NOT NULL DEFAULT 'unknown';
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'init', sql: INIT },
   { version: 2, name: 'issue_url', sql: ISSUE_URL },
@@ -306,6 +338,10 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 4, name: 'provider_pressure_reset', sql: PROVIDER_PRESSURE_RESET },
   { version: 5, name: 'controller_meta', sql: CONTROLLER_META },
   { version: 6, name: 'token_usage', sql: TOKEN_USAGE },
+  { version: 7, name: 'token_usage_provider', sql: TOKEN_USAGE_PROVIDER },
+  { version: 8, name: 'provider_status', sql: PROVIDER_STATUS },
+  { version: 9, name: 'provider_status_runtime', sql: PROVIDER_STATUS_RUNTIME },
+  { version: 10, name: 'provider_status_auth', sql: PROVIDER_STATUS_AUTH },
 ];
 
 export function applyMigrations(db: BetterSqlite3.Database): number {

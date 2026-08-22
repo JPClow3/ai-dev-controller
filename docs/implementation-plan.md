@@ -110,19 +110,44 @@ These are the ones worth keeping green as the rest lands:
 Config already exists and validates (`config/routing.yaml`, `escalation.yaml`).
 What remains is the selection logic.
 
-- [ ] `selectModel(input): RoutingDecision` — `utility = expected_score −
-      scarcity_penalty − latency_penalty`
-- [ ] Champion comes from `routing_stats` for `(repository, role)` once it has
+- [x] `selectModel(input): RoutingDecision` — `utility = expected_score −
+      scarcity_penalty − latency_penalty − token_penalty`
+- [x] Champion comes from `routing_stats` for `(repository, role)` once it has
       enough samples; otherwise from `config/routing.yaml`
-- [ ] Pressure source: `orca account list --json` already exposes
+- [x] Pressure source: `orca account list --json` already exposes
       `rateLimits.codex.weekly.usedPercent`. Use it. No browser scraping.
-- [ ] `nextEscalation()` returns only actions `config/escalation.yaml` permits
+- [x] `nextEscalation()` returns only actions `config/escalation.yaml` permits
       for that failure class — a `mechanical` failure can never reach Sol
-- [ ] Reviewer selection by authorship share, preferring a family outside the
+- [x] Reviewer selection by authorship share, preferring a family outside the
       dominant one
 
-Tests pin the OpenAI pilot policy: challengers use the same model at a different
-reasoning effort; high-risk never experiments; final review uses the Sol tier.
+Tests now pin multi-provider routing policy: same-provider challengers use the
+same model at a different reasoning effort; cross-provider challengers may switch
+both model and provider; high-risk never experiments; final review prefers a
+family outside the dominant one. When ChatGPT is exhausted, routing shifts to
+declared Command Code and Z.AI challengers rather than failing while any
+provider remains usable.
+
+### Multi-provider routing and TUI (2026-08-19)
+
+Added after the single-provider pilot to generalize structured calls across
+providers without changing the selector contract:
+
+- `config/providers.yaml` declares provider connections, transports, optional
+  monthly token limits, and the Command Code plan hint.
+- `src/agents/command-code-transport.ts` drives `command-code -p --output-format json`.
+- `src/agents/openai-compatible-transport.ts` drives Z.AI over HTTP.
+- `src/agents/transports.ts` builds enabled transports from config and env.
+- `src/providers/{catalog,runtime}.ts` build the router eligibility snapshot:
+  an alias needs a transport, an allowed model plan, and a ready provider.
+- `src/providers/probe.ts` performs non-billing health probes for the TUI and
+  `doctor`; unavailable providers are excluded while healthy providers fail over.
+- `src/tui/{snapshot,render}.ts` render provider, pressure, usage, and role
+  routing. Run with `pnpm cli ui` (`r` refresh, `q` quit).
+- `src/state/migrations.ts` v7-v10 add provider/model attribution and durable
+  provider state, authentication state, and next-probe metadata.
+
+Agentic worker sessions remain on Codex/Orca in this phase.
 
 ## Task 7 — Orca adapter
 

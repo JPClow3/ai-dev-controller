@@ -72,6 +72,7 @@ Every issue branches from a freshly fetched base at the moment it becomes eligib
 | **Linear** | Create the issue and provide repository/product context. |
 | **Orca** | Watch agents, intervene on genuine blockers. |
 | **GitHub** | Review and merge draft PRs. |
+| **TUI** | Watch connected providers, quota pressure, and usage (`pnpm cli ui`). |
 
 The controller is infrastructure. The CLI is an escape hatch, not a daily tool. v1 ships no web dashboard.
 
@@ -132,9 +133,11 @@ the gitignored, path-only `projects/registry.local.yaml` overlay.
 | Variable | Required | Description |
 | --- | --- | --- |
 | `LINEAR_API_KEY` | **Yes** | Personal API key — Settings → Security & access → Personal API keys |
-| `GITHUB_TOKEN` | No | Token with `repo` + `workflow` scopes. Falls back to the authenticated `gh` CLI identity. The controller never merges. |
 | `ORCA_BIN` | No | Path to `orca` CLI. Default: `orca` (assumes it's on PATH). |
 | `CODEX_BIN` | No | Path to `codex` CLI. Default: `codex`. |
+| `COMMAND_CODE_BIN` | No | Path to the Command Code CLI. Default: `command-code`; bare `cmd` is rejected on Windows because it can invoke `cmd.exe`. |
+| `COMMAND_CODE_PLAN` | No | Command Code plan (`go`, `goat`, `pro`, `max`). Aliases above this plan, or absent from the catalog, are excluded from routing. |
+| `ZAI_API_KEY` | No | Z.AI OpenAI-compatible API key. Required for the `zai` provider. |
 | `AI_DEV_DB` | No | SQLite database path. Default: `./data/controller.db`. |
 | `AI_DEV_LOG_LEVEL` | No | Log verbosity (`info`, `debug`, etc.). Default: `info`. |
 
@@ -170,7 +173,7 @@ inspection from commands that resume, retry, or reconcile workflow state.
 
 ```
 src/
-  agents/       agent definitions
+  agents/       agent definitions and provider transports
   cli/          ai-dev CLI commands
   config/       config contract, Zod schemas, snake_case → camelCase
   git/          git helpers
@@ -179,13 +182,15 @@ src/
   linear/       issue polling, labels, explicit dependency reads
   orca/         worktree creation, Orca client
   projects/     repository resolution
+  providers/    model catalog and provider reachability probes
   recovery/     run recovery after restart
   reviews/      independent Sol final review
-  routing/      OpenAI model/thinking-level routing and escalation
+  routing/      model/provider routing and escalation
   scheduler/    dependency waves, capacity, priority (DAG)
   scoring/      composite scoring, champion-challenger, promotion
   state/        SQLite persistence, run claims, audit trail
     repositories/ focused issue, run, task, review, score and system stores
+  tui/          provider and usage dashboard snapshot/renderer
   util/         shared utilities
   validation/   immutable contract readers, safety policy, execution evidence
   workflow/     state machine, worker lifecycle, validation, recovery wiring
@@ -193,6 +198,7 @@ src/
 config/
   routing.yaml      model routing aliases
   escalation.yaml   escalation budget policy
+  providers.yaml    provider connections, transports, limits
 
 docs/
   implementation-plan.md  revised task plan
@@ -267,7 +273,15 @@ Enforced by the controller; no model can override them.
   Luna xhigh/high handles curation, planning, routine bugfixes, multi-file features,
   and large context; Sol handles high-risk changes, reviews, and orchestration.
   Average token consumption is persisted to SQLite (`token_usage`) and penalizes
-  excessively verbose aliases.
+  excessively verbose aliases. When ChatGPT pressure is `EXHAUSTED`, routing
+  shifts to cross-provider challengers declared in `config/routing.yaml` (Command
+  Code and Z.AI) without changing the stored champion.
+- `config/providers.yaml` declares provider connections, transports, and optional
+  token limits. The router receives one shared eligibility snapshot: only aliases
+  with a constructed transport, permitted model plan, and `ready` provider state
+  can run. Individual provider failures cool down and fail over; all-unavailable
+  conditions pause work resumably. The TUI (`pnpm cli ui`) and `pnpm cli providers`
+  show that same state, including unverified HTTP credentials and cooldowns.
 - Orca workspace board columns (`todo`, `in-progress`, `in-review`, `completed`)
   are synchronized in real-time on every workflow state transition and recovery pass.
 

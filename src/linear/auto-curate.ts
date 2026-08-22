@@ -1,5 +1,5 @@
 import type { RepositoryResolution } from '../curation/curate.js';
-import { AI_LIFECYCLE_LABELS, type AiLifecycleLabel } from '../workflow/states.js';
+import { AI_LIFECYCLE_LABELS, type AiLifecycleLabel } from '../domain/workflow.js';
 import type { NewlyCreatedLinearIssue } from './issues.js';
 
 export const AUTO_CURATE_CURSOR_KEY = 'linear.auto_curate_after';

@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { copyFileSync, lstatSync, mkdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import type { Risk } from '../state/types.js';
 import type { GitRunner, Git } from '../git/repository.js';
 import type { RemediationTask } from '../reviews/remediation.js';
@@ -69,8 +69,9 @@ export function shouldWaitForExistingWorkerLaunch(input: {
   resumingDispatch: boolean;
   recentHeartbeat: boolean;
   terminalExists: boolean;
+  processAlive: boolean;
 }): boolean {
-  return input.resumingDispatch && (input.recentHeartbeat || input.terminalExists);
+  return input.resumingDispatch && (input.recentHeartbeat || input.terminalExists || input.processAlive);
 }
 
 /** Builds one disjoint worker task per affected file for a remediation wave. */
@@ -142,9 +143,9 @@ export async function cleanFailedAttempt(
   if (owned.length === 0) return false;
   const run = (args: string[]) => gitRunner(workerPath, args);
   const nulList = (value: string) => value.split('\0').filter(Boolean);
-  const tracked = nulList(await run(['diff', '--name-only', '-z', 'HEAD', '--', ...owned]).catch(() => ''));
-  const untracked = nulList(await run(['ls-files', '--others', '--exclude-standard', '-z', '--', ...owned]).catch(() => ''));
-  const patch = await run(['diff', '--binary', 'HEAD', '--', ...owned]).catch(() => '');
+  const tracked = nulList(await run(['diff', '--name-only', '-z', 'HEAD', '--', ...owned]));
+  const untracked = nulList(await run(['ls-files', '--others', '--exclude-standard', '-z', '--', ...owned]));
+  const patch = await run(['diff', '--binary', 'HEAD', '--', ...owned]);
   writeFileSync(evidencePath, [patch, '', '# Untracked files', ...untracked].join('\n'), 'utf8');
 
   if (tracked.length > 0) {

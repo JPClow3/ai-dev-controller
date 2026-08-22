@@ -61,14 +61,26 @@ describe('selectModel', () => {
     expect(d.isChallenger).toBe(false);
   });
 
-  it('fails closed when the provider for the locked high-risk role is exhausted', () => {
+  it('fails closed only when every high-risk provider is exhausted', () => {
     const pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
+    pressure['commandcode'] = { provider: 'commandcode', pressure: 'EXHAUSTED', remainingAllowance: 0, source: 'test', manualOverride: false };
+    pressure['zai'] = { provider: 'zai', pressure: 'EXHAUSTED', remainingAllowance: 0, source: 'test', manualOverride: false };
     expect(() =>
       selectModel(
         { projectId: 'lorebound', role: 'routine_bugfix', risk: 'high' },
         deps({ pressure }),
       ),
     ).toThrow(/No eligible model for role "high_risk"/);
+  });
+
+  it('falls back to another high-risk provider when the champion provider is exhausted', () => {
+    const pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
+    const d = selectModel(
+      { projectId: 'lorebound', role: 'routine_bugfix', risk: 'high' },
+      deps({ pressure, random: () => 0.99 }),
+    );
+    expect(d.alias).toBe('sol_cc');
+    expect(d.reason).toBe('locked_high_risk');
   });
 
   it('does not re-select an excluded alias through the high-risk lock', () => {
@@ -78,7 +90,7 @@ describe('selectModel', () => {
           projectId: 'lorebound',
           role: 'routine_bugfix',
           risk: 'high',
-          excludeAliases: ['sol_xhigh'],
+          excludeAliases: ['sol_xhigh', 'sol_cc', 'glm_zai'],
         },
         deps(),
       ),
@@ -87,13 +99,16 @@ describe('selectModel', () => {
 
   /**
    * The behaviour the design asks for: pressure moves today's route without
-   * touching the stored champion.
+   * touching the stored champion. With cross-provider challengers, routine
+   * work should fall back rather than fail when ChatGPT is exhausted.
    */
-  it('fails closed when the OpenAI provider is exhausted without changing the champion', () => {
+  it('shifts pressure to a non-ChatGPT provider without changing the champion', () => {
     const pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
-    expect(() =>
-      selectModel({ projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' }, deps({ pressure })),
-    ).toThrow(/No eligible model/);
+    const d = selectModel(
+      { projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' },
+      deps({ pressure, random: () => 0.99 }),
+    );
+    expect(d.reason).toBe('pressure_shift');
     expect(routing.roles['routine_bugfix']!.champion).toBe('luna_high');
   });
 
@@ -122,8 +137,10 @@ describe('selectModel', () => {
     expect(d.alias).not.toBe('luna_high');
   });
 
-  it('throws rather than silently running nothing when every candidate is out', () => {
+  it('throws rather than silently running nothing when every candidate provider is exhausted', () => {
     const pressure = withOverride(defaultPressure(routing), 'chatgpt', 'EXHAUSTED');
+    pressure['commandcode'] = { provider: 'commandcode', pressure: 'EXHAUSTED', remainingAllowance: 0, source: 'test', manualOverride: false };
+    pressure['zai'] = { provider: 'zai', pressure: 'EXHAUSTED', remainingAllowance: 0, source: 'test', manualOverride: false };
     expect(() =>
       selectModel({ projectId: 'lorebound', role: 'routine_bugfix', risk: 'low' }, deps({ pressure })),
     ).toThrow(/No eligible model/);

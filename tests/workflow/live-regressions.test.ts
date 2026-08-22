@@ -267,8 +267,10 @@ describe('throttle considers every provider, not one', () => {
 });
 
 describe('a disabled provider is never selected', () => {
-  it('throws rather than dispatching nothing when provider is exhausted', () => {
+  it('throws only when every candidate provider is exhausted', () => {
     const pressure = withOverride(defaultPressure(config.routing), 'chatgpt', 'EXHAUSTED');
+    pressure['commandcode'] = { provider: 'commandcode', pressure: 'EXHAUSTED', remainingAllowance: 0, source: 'test', manualOverride: false };
+    pressure['zai'] = { provider: 'zai', pressure: 'EXHAUSTED', remainingAllowance: 0, source: 'test', manualOverride: false };
     expect(() =>
       selectModel({ projectId: 'portfolio', role: 'routine_bugfix', risk: 'low' }, {
         routing: config.routing,

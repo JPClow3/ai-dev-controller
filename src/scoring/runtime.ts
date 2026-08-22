@@ -6,6 +6,9 @@ import type { CriterionVerdict } from '../state/types.js';
 import type { RunRecord } from '../state/types.js';
 import { measureChurn } from './churn.js';
 import { scoreAttempt } from './composite.js';
+import { logger } from '../util/log.js';
+
+const log = logger('scoring');
 
 export interface FinalizeRunScoresInput {
   run: RunRecord;
@@ -124,5 +127,6 @@ export async function finalizeRunScores(input: FinalizeRunScoresInput): Promise<
       success,
     })) recorded += 1;
   }
+  log.info(`${input.run.issueId}: recorded ${recorded} worker score(s)`);
   return recorded;
 }

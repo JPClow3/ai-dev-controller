@@ -46,7 +46,7 @@ const log = logger('steps');
  * scattered through the state machine.
  */
 export function createSteps(wiring: StepsWiring): OrchestratorDeps {
-  const { config, repos, agents, orca, github, git } = wiring;
+  const { config, repos, agents, github, git } = wiring;
   const integrator = createIntegrator(wiring.gitRunner);
   const writeToLinear = wiring.writeToLinear !== false;
 

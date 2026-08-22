@@ -2,11 +2,14 @@ import type { RoutingConfig } from '../config/routing-schema.js';
 import type { ScoringConfig } from '../config/scoring-schema.js';
 import { scarcityMultiplier, isUsable, type PressureMap } from './pressure.js';
 import type { AliasStats, AuthorshipSummary, RoutingDecision, RoutingInput } from './types.js';
+import type { ProviderEligibilitySnapshot } from '../providers/runtime.js';
 
 export interface SelectorDeps {
   routing: RoutingConfig;
   scoring: ScoringConfig;
   pressure: PressureMap;
+  /** The composed provider/transport/plan readiness snapshot. */
+  eligibility?: ProviderEligibilitySnapshot;
   /** Per-repository, per-role evidence. Empty map means "no evidence yet". */
   stats: (projectId: string, role: string, alias: string) => AliasStats | null;
   /** Injected so exploration is deterministic in tests. */
@@ -45,6 +48,11 @@ export function selectModel(input: RoutingInput, deps: SelectorDeps): RoutingDec
     const spec = routing.aliases[alias];
     if (!spec) {
       rejected.push({ alias, why: 'not a declared alias' });
+      return false;
+    }
+    const availability = deps.eligibility?.aliases[alias];
+    if (deps.eligibility && !availability?.eligible) {
+      rejected.push({ alias, why: availability?.reason ?? 'no provider eligibility record' });
       return false;
     }
     if (!isUsable(deps.pressure, spec.provider)) {

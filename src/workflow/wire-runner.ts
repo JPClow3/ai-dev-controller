@@ -15,7 +15,8 @@ import { setAiLifecycleLabel } from '../linear/labels.js';
 import { AUTO_CURATE_CURSOR_KEY, AUTO_CURATE_FLOOR_KEY, autoCurateNewIssues } from '../linear/auto-curate.js';
 import { postBlockerNotice, postBlockerQuestion } from '../linear/dependencies.js';
 import { listRecentlyMerged, issueIdFromBranch } from '../github/pull-requests.js';
-import { applyQuotaCooldown, isProviderQuotaExhausted, refreshRuntimePressure } from '../routing/quota.js';
+import { applyProviderUnavailableCooldown, applyQuotaCooldown, isProviderQuotaExhausted, isProviderUnavailable, refreshRuntimePressure } from '../routing/quota.js';
+import type { ProviderEligibilitySnapshot } from '../providers/runtime.js';
 import { pressureFromOrca } from '../routing/pressure.js';
 import { resolveRepository } from '../projects/resolver.js';
 import { selectModel } from '../routing/selector.js';
@@ -41,6 +42,7 @@ export interface RunnerWiring {
   routing: SelectorDeps;
   routingConfig: RoutingConfig;
   pressure: ReturnType<typeof import('../routing/pressure.js').defaultPressure>;
+  eligibility: ProviderEligibilitySnapshot;
   disabled: string[];
   orca: OrcaClient;
   github: GitHub;
@@ -60,6 +62,7 @@ export function createRunnerDeps(wiring: RunnerWiring): RunnerDeps {
     routing,
     routingConfig,
     pressure,
+    eligibility,
     disabled,
     orca,
     github,
@@ -223,12 +226,21 @@ export function createRunnerDeps(wiring: RunnerWiring): RunnerDeps {
             if (writeToLinear) await setAiLifecycleLabel(identifier, label);
           },
           onFailure(issue, error) {
-            if (!isProviderQuotaExhausted(error)) return 'continue';
-            const resetAt = applyQuotaCooldown(repos, pressure, error);
-            log.warn(
-              `${issue.identifier}: ${error.provider} exhausted; curation paused until ${resetAt.toISOString()}`,
-            );
-            return 'stop';
+            if (isProviderQuotaExhausted(error)) {
+              const resetAt = applyQuotaCooldown(repos, pressure, error);
+              log.warn(
+                `${issue.identifier}: ${error.provider} exhausted; curation paused until ${resetAt.toISOString()}`,
+              );
+              return 'stop';
+            }
+            if (isProviderUnavailable(error)) {
+              const retryAt = applyProviderUnavailableCooldown(repos, pressure, error);
+              log.warn(
+                `${issue.identifier}: ${error.provider} unavailable; curation will retry after ${retryAt.toISOString()}`,
+              );
+              return 'stop';
+            }
+            return 'continue';
           },
         });
   
@@ -324,7 +336,9 @@ export function createRunnerDeps(wiring: RunnerWiring): RunnerDeps {
           disabled,
           observed,
         );
-        return Object.values(pressure).map((p) => p.pressure);
+        return Object.values(eligibility.providers).map((provider) =>
+          provider.state === 'ready' ? (pressure[provider.provider]?.pressure ?? 'NORMAL') : 'EXHAUSTED',
+        );
       },
   
       dispatch: createDispatcher(dispatchDeps),

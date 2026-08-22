@@ -6,13 +6,17 @@ import { createOrcaClient, type OrcaClient } from '../orca/client.js';
 import { createGitHub, type GitHub } from '../github/client.js';
 import { createGit, realGit } from '../git/repository.js';
 import { createInvoker } from '../agents/invoke.js';
-import { codexTransport } from '../agents/codex-profiles.js';
+import { buildTransports } from '../agents/transports.js';
+import { probeProviders } from '../providers/probe.js';
+import { buildProviderEligibility, type ProviderEligibilitySnapshot } from '../providers/runtime.js';
 import { createAgents, reviewerCandidates } from '../agents/roles.js';
 import { defaultPressure, withOverride } from '../routing/pressure.js';
 import { isUsable } from '../routing/pressure.js';
 import {
   applyQuotaCooldown,
+  applyProviderUnavailableCooldown,
   isProviderQuotaExhausted,
+  isProviderUnavailable,
   refreshRuntimePressure,
 } from '../routing/quota.js';
 import { clearAiLifecycleLabels, setAiLifecycleLabel } from '../linear/labels.js';
@@ -32,7 +36,7 @@ import { projectToLinear, projectToOrcaBoard } from './states.js';
 import { createRecovery } from './wire-recovery.js';
 import { createRunnerDeps } from './wire-runner.js';
 import { forcePilotAlias } from '../routing/forced.js';
-import { logger } from '../util/log.js';
+import { logger, newCorrelationId, withLogContext } from '../util/log.js';
 
 const log = logger('wire');
 
@@ -59,20 +63,25 @@ export function buildController(options: WiringOptions) {
   const github = options.github ?? createGitHub();
   const git = createGit(realGit);
   const writeToLinear = options.writeToLinear !== false;
+  const transportBuild = buildTransports({ providers: config.providers });
 
   const invoker = createInvoker({
     rootDir: config.rootDir,
     routing: config.routing,
-    transports: [codexTransport()],
+    transports: transportBuild.transports,
   });
   const agents = createAgents(invoker, config.routing, {
-    onUsage: (aliasId, role, usage) =>
+    onUsage: (aliasId, role, usage) => {
+      const spec = config.routing.aliases[aliasId];
       repos.recordTokenUsage({
         aliasId,
         role,
+        provider: spec?.provider ?? 'chatgpt',
+        model: spec?.model,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
-      }),
+      });
+    },
   });
 
   // Operator override, which the design lists as a pressure source but nothing
@@ -91,6 +100,47 @@ export function buildController(options: WiringOptions) {
   }
   refreshRuntimePressure(pressure, config.routing, repos.activeProviderPressures(), disabled);
 
+  const eligibility: ProviderEligibilitySnapshot = { providers: {}, aliases: {} };
+  let lastProviderProbeAt = 0;
+  const PROVIDER_PROBE_INTERVAL_MS = 5 * 60_000;
+
+  function replaceEligibility(next: ProviderEligibilitySnapshot): void {
+    for (const key of Object.keys(eligibility.providers)) delete eligibility.providers[key];
+    for (const key of Object.keys(eligibility.aliases)) delete eligibility.aliases[key];
+    Object.assign(eligibility.providers, next.providers);
+    Object.assign(eligibility.aliases, next.aliases);
+  }
+
+  async function refreshProviderEligibility(force = false): Promise<void> {
+    const now = Date.now();
+    const due = force || now - lastProviderProbeAt >= PROVIDER_PROBE_INTERVAL_MS;
+    const probes = due ? await probeProviders({ providers: config.providers }) : undefined;
+    if (due) lastProviderProbeAt = now;
+    refreshRuntimePressure(pressure, config.routing, repos.activeProviderPressures(), disabled);
+    const next = buildProviderEligibility({
+      providers: config.providers,
+      routing: config.routing,
+      pressure,
+      unavailableTransports: transportBuild.unavailable,
+      persisted: repos.providerStatuses(),
+      env: process.env,
+      ...(probes ? { probes } : {}),
+    });
+    replaceEligibility(next);
+    if (due) {
+      for (const status of Object.values(next.providers)) repos.setProviderStatus(status);
+    }
+  }
+
+  replaceEligibility(buildProviderEligibility({
+    providers: config.providers,
+    routing: config.routing,
+    pressure,
+    unavailableTransports: transportBuild.unavailable,
+    persisted: repos.providerStatuses(),
+    env: process.env,
+  }));
+
   // Pin every role to one alias. A pilot needs a known, reachable model rather
   // than whatever routing picks; without this, one unavailable challenger can
   // fail a run for reasons unrelated to what is being tested.
@@ -106,6 +156,7 @@ export function buildController(options: WiringOptions) {
     routing: routingConfig,
     scoring: config.scoring,
     pressure,
+    eligibility,
     stats: (projectId: string, role: string, alias: string) => repos.aliasStats(projectId, role, alias),
   };
 
@@ -270,7 +321,7 @@ export function buildController(options: WiringOptions) {
    * long-running function.
    */
   async function advanceAll(skipRunIds: ReadonlySet<string> = new Set()): Promise<number> {
-    refreshRuntimePressure(pressure, config.routing, repos.activeProviderPressures(), disabled);
+    await refreshProviderEligibility();
     let moved = 0;
     for (const run of repos.activeRuns()) {
       if (skipRunIds.has(run.id)) continue;
@@ -295,7 +346,7 @@ export function buildController(options: WiringOptions) {
         ctx.run.state === 'FINAL_REVIEW' &&
         !reviewerCandidates(routingConfig).some((alias) => {
           const spec = routingConfig.aliases[alias];
-          return spec ? isUsable(pressure, spec.provider) : false;
+          return spec ? eligibility.aliases[alias]?.eligible === true && isUsable(pressure, spec.provider) : false;
         })
       ) {
         // Durable provider cooldown: leave the run at its resumable state and
@@ -303,22 +354,25 @@ export function buildController(options: WiringOptions) {
         continue;
       }
       try {
-        const result = await advanceRun(ctx, steps);
-        if (result.to) {
-          moved += 1;
-          log.info(`${run.issueId}: ${result.from} -> ${result.to} (${result.detail ?? ''})`);
-          await syncLinear(run.issueId, result.to);
-          await syncOrcaBoard(run.issueId, ctx.run.orcaWorktreeId, result.to);
-        }
+        await withLogContext({ correlationId: newCorrelationId(), runId: run.id, issueId: run.issueId }, async () => {
+          const result = await advanceRun(ctx, steps);
+          if (result.to) {
+            moved += 1;
+            log.info(`${run.issueId}: ${result.from} -> ${result.to} (${result.detail ?? ''})`);
+            await syncLinear(run.issueId, result.to);
+            await syncOrcaBoard(run.issueId, ctx.run.orcaWorktreeId, result.to);
+          }
+        });
       } catch (err) {
-        if (isProviderQuotaExhausted(err)) {
-          const resetAt = applyQuotaCooldown(repos, pressure, err);
-          log.warn(
-            `${run.issueId}: ${err.provider} exhausted; ${ctx.run.state} paused until ${resetAt.toISOString()}`,
-          );
-        } else {
-          log.error(`${run.issueId}: step failed`, (err as Error).message);
-        }
+        withLogContext({ correlationId: newCorrelationId(), runId: run.id, issueId: run.issueId }, () => {
+          if (isProviderQuotaExhausted(err)) {
+            const resetAt = applyQuotaCooldown(repos, pressure, err);
+            log.warn(`${run.issueId}: ${err.provider} exhausted; ${ctx.run.state} paused until ${resetAt.toISOString()}`);
+          } else if (isProviderUnavailable(err)) {
+            const retryAt = applyProviderUnavailableCooldown(repos, pressure, err);
+            log.warn(`${run.issueId}: ${err.provider} unavailable; ${ctx.run.state} will retry after ${retryAt.toISOString()}`);
+          } else log.error(`${run.issueId}: step failed`, (err as Error).message);
+        });
       }
     }
     return moved;
@@ -365,6 +419,7 @@ export function buildController(options: WiringOptions) {
     routing,
     routingConfig,
     pressure,
+    eligibility,
     disabled,
     orca,
     github,
