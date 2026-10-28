@@ -25,6 +25,24 @@
 # and resolution succeeds via `sole_project`.
 
 projects:
+  ai-dev-controller:
+    enabled: true
+    repository:
+      path: H:/Code/ai-dev-controller
+      github: JPClow3/ai-dev-controller
+      base_branch: main
+    linear:
+      project: Orchestration
+      default: true
+    knowledge:
+      status: unverified
+    routing_profile: default
+    validation:
+      source: repository
+    ci:
+      trigger: pull_request
+      required_checks: []
+
   unirv-monolith:
     enabled: true
     repository:
