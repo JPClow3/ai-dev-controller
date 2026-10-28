@@ -1,0 +1,34 @@
+version: 1
+
+project:
+  id: ai-dev-controller
+
+base_branch: main
+
+validation:
+  # A fresh Orca worktree is a new checkout with no node_modules, so every
+  # command below fails without this first. The frozen install matches CI.
+  setup:
+    command: pnpm install --frozen-lockfile
+    required: true
+  commands:
+    lint:
+      command: pnpm run lint
+      required: false
+    typecheck:
+      command: pnpm run typecheck
+      required: true
+    test:
+      command: pnpm run test
+      required: true
+    build:
+      command: pnpm run build
+      required: true
+
+risk:
+  high:
+    paths:
+      - .github/workflows/**
+
+knowledge:
+  map: .ai-workflow/knowledge-map.yaml
